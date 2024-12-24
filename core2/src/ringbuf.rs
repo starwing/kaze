@@ -159,7 +159,6 @@ impl Sender<'_> {
     /// and false when futex_wait is needed.
     pub fn try_push(&mut self, data: &[u8]) -> bool {
         let needed_space = get_aligned_size(PS + data.len(), PS);
-        assert!(needed_space <= i32::MAX as usize);
 
         // check if there is enough space
         let hdr = self.data.hdr_mut();

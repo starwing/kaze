@@ -1,0 +1,20 @@
+[package]
+name = "kaze_util"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "kaze_cli"
+path = "src/cli/main.rs"
+
+[[bin]]
+name = "kaze_echo"
+path = "src/echo/main.rs"
+
+[dependencies]
+anyhow = "1.0.95"
+clap = "4.5.23"
+rustyline = "15.0.0"
+
+[dependencies.kaze_core]
+path = "../core"
