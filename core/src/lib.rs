@@ -23,23 +23,9 @@ impl KazeState {
         }
     }
 
-    pub fn cleanup_host(name: &str) -> io::Result<()> {
+    pub fn new(name: &str, ident: u32, bufsize: usize) -> io::Result<Self> {
         let name = CString::new(name)?;
-        match unsafe { ffi::kz_cleanup_host(name.as_ptr()) } {
-            ffi::KZ_OK => Ok(()),
-            code => Err(io::Error::from_raw_os_error(code as i32)),
-        }
-    }
-
-    pub fn new(
-        name: &str,
-        ident: u32,
-        netbuf: usize,
-        hostbuf: usize,
-    ) -> io::Result<Self> {
-        let name = CString::new(name)?;
-        let ptr =
-            unsafe { ffi::kz_new(name.as_ptr(), ident, netbuf, hostbuf) };
+        let ptr = unsafe { ffi::kz_new(name.as_ptr(), ident, bufsize) };
         if ptr.is_null() {
             return Err(io::Error::last_os_error());
         }
@@ -55,10 +41,6 @@ impl KazeState {
         Ok(Self { ptr })
     }
 
-    pub unsafe fn dup(&self) -> KazeState {
-        KazeState { ptr: self.ptr }
-    }
-
     pub fn name(&self) -> &str {
         unsafe {
             std::ffi::CStr::from_ptr(ffi::kz_name(self.ptr))
@@ -67,123 +49,174 @@ impl KazeState {
         }
     }
 
-    pub fn is_sidecar(&self) -> bool {
-        unsafe { ffi::kz_is_sidecar(self.ptr) != 0 }
+    pub fn ident(&self) -> u32 {
+        unsafe { ffi::kz_ident(self.ptr) }
     }
 
-    pub fn is_host(&self) -> bool {
-        unsafe { ffi::kz_is_host(self.ptr) != 0 }
+    pub fn pid(&self) -> i32 {
+        unsafe { ffi::kz_pid(self.ptr) }
     }
 
-    pub fn try_push(&mut self, data: &[u8]) -> Result<bool> {
-        match unsafe {
-            ffi::kz_try_push(self.ptr, data.as_ptr().cast(), data.len())
-        } {
-            ffi::KZ_OK => Ok(true),
-            ffi::KZ_BUSY => Ok(false),
+    pub fn used(&self) -> usize {
+        unsafe { ffi::kz_used(self.ptr) }
+    }
+
+    pub fn size(&self) -> usize {
+        unsafe { ffi::kz_size(self.ptr) }
+    }
+
+    pub fn owner(&self) -> (i32, i32) {
+        let mut sender = 0;
+        let mut receiver = 0;
+        unsafe { ffi::kz_owner(self.ptr, &mut sender, &mut receiver) };
+        (sender, receiver)
+    }
+
+    pub fn set_owner(&mut self, sender: Option<i32>, receiver: Option<i32>) {
+        unsafe {
+            ffi::kz_set_owner(
+                self.ptr,
+                sender.unwrap_or(-1),
+                receiver.unwrap_or(-1),
+            )
+        }
+    }
+
+    pub fn try_push(&mut self, len: usize) -> Result<PushContext<'_>> {
+        let mut ctx = MaybeUninit::uninit();
+        match unsafe { ffi::kz_try_push(self.ptr, ctx.as_mut_ptr(), len) } {
+            ffi::KZ_OK => Ok(PushContext {
+                raw: unsafe { ctx.assume_init() },
+                _marker: std::marker::PhantomData,
+            }),
             code => Err(Error { code }),
         }
     }
 
-    pub fn push(&mut self, data: &[u8]) -> Result<()> {
+    pub fn push(&mut self, len: usize) -> Result<PushContext<'_>> {
+        let mut ctx = MaybeUninit::uninit();
+        match unsafe { ffi::kz_push(self.ptr, ctx.as_mut_ptr(), len) } {
+            ffi::KZ_OK => Ok(PushContext {
+                raw: unsafe { ctx.assume_init() },
+                _marker: std::marker::PhantomData,
+            }),
+            code => Err(Error { code }),
+        }
+    }
+
+    pub fn push_until(
+        &mut self,
+        len: usize,
+        millis: u32,
+    ) -> Result<PushContext<'_>> {
+        let mut ctx = MaybeUninit::uninit();
         match unsafe {
-            ffi::kz_push(self.ptr, data.as_ptr().cast(), data.len())
+            ffi::kz_push_until(self.ptr, ctx.as_mut_ptr(), len, millis as i32)
         } {
+            ffi::KZ_OK => Ok(PushContext {
+                raw: unsafe { ctx.assume_init() },
+                _marker: std::marker::PhantomData,
+            }),
+            code => Err(Error { code }),
+        }
+    }
+
+    pub fn try_pop(&mut self) -> Result<PopContext<'_>> {
+        let mut ctx = MaybeUninit::uninit();
+        match unsafe { ffi::kz_try_pop(self.ptr, ctx.as_mut_ptr()) } {
+            ffi::KZ_OK => Ok(PopContext {
+                raw: unsafe { ctx.assume_init() },
+                _marker: std::marker::PhantomData,
+            }),
+            code => Err(Error { code }),
+        }
+    }
+
+    pub fn pop(&mut self) -> Result<PopContext<'_>> {
+        let mut ctx = MaybeUninit::uninit();
+        match unsafe { ffi::kz_pop(self.ptr, ctx.as_mut_ptr()) } {
+            ffi::KZ_OK => Ok(PopContext {
+                raw: unsafe { ctx.assume_init() },
+                _marker: std::marker::PhantomData,
+            }),
+            code => Err(Error { code }),
+        }
+    }
+
+    pub fn pop_until(&mut self, millis: u32) -> Result<PopContext<'_>> {
+        let mut ctx = MaybeUninit::uninit();
+        match unsafe {
+            ffi::kz_pop_until(self.ptr, ctx.as_mut_ptr(), millis as i32)
+        } {
+            ffi::KZ_OK => Ok(PopContext {
+                raw: unsafe { ctx.assume_init() },
+                _marker: std::marker::PhantomData,
+            }),
+            code => Err(Error { code }),
+        }
+    }
+}
+
+pub struct PushContext<'a> {
+    raw: ffi::kz_PushContext,
+    _marker: std::marker::PhantomData<&'a ()>,
+}
+
+impl PushContext<'_> {
+    pub fn buffer_mut(&mut self) -> (&mut [u8], &mut [u8]) {
+        unsafe fn slice_from_raw<'a>(p: *mut i8, len: usize) -> &'a mut [u8] {
+            if len == 0 {
+                &mut []
+            } else {
+                unsafe { slice::from_raw_parts_mut(p.cast(), len) }
+            }
+        }
+        unsafe {
+            let mut len1: usize = 0;
+            let p1 = ffi::kz_push_buffer(&mut self.raw, 0, &mut len1);
+            let mut len2: usize = 0;
+            let p2 = ffi::kz_push_buffer(&mut self.raw, 1, &mut len2);
+            (slice_from_raw(p1, len1), slice_from_raw(p2, len2))
+        }
+    }
+
+    pub fn commit(mut self, len: usize) -> Result<()> {
+        match unsafe { ffi::kz_push_commit(&mut self.raw, len) } {
             ffi::KZ_OK => Ok(()),
             code => Err(Error { code }),
         }
     }
-
-    pub fn push_until(&mut self, data: &[u8], millis: u32) {
-        match unsafe {
-            ffi::kz_push_until(
-                self.ptr,
-                data.as_ptr().cast(),
-                data.len(),
-                millis as i32,
-            )
-        } {
-            ffi::KZ_OK => (),
-            code => panic!("kz_push_until failed: {}", code),
-        }
-    }
-
-    pub fn try_pop(&mut self) -> Result<ReceivedData<'_>> {
-        let mut data = MaybeUninit::uninit();
-        match unsafe { ffi::kz_try_pop(self.ptr, data.as_mut_ptr()) } {
-            ffi::KZ_OK => Ok(ReceivedData {
-                raw: unsafe { data.assume_init() },
-                _marker: std::marker::PhantomData,
-            }),
-            code => Err(Error { code }),
-        }
-    }
-
-    pub fn pop(&mut self) -> Result<ReceivedData<'_>> {
-        let mut data = MaybeUninit::uninit();
-        match unsafe { ffi::kz_pop(self.ptr, data.as_mut_ptr()) } {
-            ffi::KZ_OK => Ok(ReceivedData {
-                raw: unsafe { data.assume_init() },
-                _marker: std::marker::PhantomData,
-            }),
-            code => Err(Error { code }),
-        }
-    }
-
-    pub fn pop_until(&mut self, millis: u32) -> Result<ReceivedData<'_>> {
-        let mut data = MaybeUninit::uninit();
-        match unsafe {
-            ffi::kz_pop_until(self.ptr, data.as_mut_ptr(), millis as i32)
-        } {
-            ffi::KZ_OK => Ok(ReceivedData {
-                raw: unsafe { data.assume_init() },
-                _marker: std::marker::PhantomData,
-            }),
-            code => Err(Error { code }),
-        }
-    }
 }
 
-pub struct ReceivedData<'a> {
-    raw: ffi::kz_ReceivedData,
+pub struct PopContext<'a> {
+    raw: ffi::kz_PopContext,
     _marker: std::marker::PhantomData<&'a ()>,
 }
 
-impl Drop for ReceivedData<'_> {
+impl PopContext<'_> {
     #[inline]
-    fn drop(&mut self) {
-        unsafe { ffi::kz_data_free(&mut self.raw) }
+    pub fn buffer(&self) -> (&[u8], &[u8]) {
+        unsafe fn slice_from_raw<'a>(p: *const i8, len: usize) -> &'a [u8] {
+            if len == 0 {
+                &[]
+            } else {
+                unsafe { slice::from_raw_parts(p.cast(), len) }
+            }
+        }
+        let mut len1 = 0usize;
+        let p1 = unsafe { ffi::kz_pop_buffer(&self.raw, 0, &mut len1) };
+        let mut len2 = 0usize;
+        let p2 = unsafe { ffi::kz_pop_buffer(&self.raw, 1, &mut len2) };
+        unsafe { (slice_from_raw(p1, len1), slice_from_raw(p2, len2)) }
+    }
+
+    #[inline]
+    pub fn commit(mut self) {
+        unsafe { ffi::kz_pop_commit(&mut self.raw) }
     }
 }
 
-impl ReceivedData<'_> {
-    #[inline]
-    pub fn as_slices(&self) -> (&[u8], &[u8]) {
-        let cnt = unsafe { ffi::kz_data_count(&self.raw) };
-        if cnt == 1 {
-            let mut size = 0usize;
-            let data = unsafe { ffi::kz_data_part(&self.raw, 0, &mut size) };
-            return unsafe { (slice::from_raw_parts(data.cast(), size), &[]) };
-        }
-        let mut size = 0usize;
-        let data = unsafe { ffi::kz_data_part(&self.raw, 0, &mut size) };
-        let mut size2 = 0usize;
-        let data2 = unsafe { ffi::kz_data_part(&self.raw, 1, &mut size2) };
-        unsafe {
-            (
-                slice::from_raw_parts(data.cast(), size),
-                slice::from_raw_parts(data2.cast(), size2),
-            )
-        }
-    }
-
-    #[inline]
-    pub fn len(&self) -> usize {
-        unsafe { ffi::kz_data_len(&self.raw) }
-    }
-}
-
-type Result<T, E = Error> = std::result::Result<T, E>;
+pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub struct Error {
     code: i32,
@@ -206,6 +239,8 @@ impl std::fmt::Display for Error {
                 match self.code {
                     ffi::KZ_OK => "KZ_OK",
                     ffi::KZ_FAIL => "KZ_FAIL",
+                    ffi::KZ_CLOSED => "KZ_CLOSED",
+                    ffi::KZ_INVALID => "KZ_INVALID",
                     ffi::KZ_TOOBIG => "KZ_TOOBIG",
                     ffi::KZ_BUSY => "KZ_BUSY",
                     ffi::KZ_TIMEOUT => "KZ_TIMEOUT",
