@@ -7,7 +7,6 @@ pub const KZ_INVALID: i32 = -3;
 pub const KZ_TOOBIG: i32 = -4;
 pub const KZ_BUSY: i32 = -5;
 pub const KZ_TIMEOUT: i32 = -6;
-pub const KZ_LASTERR: i32 = -7;
 
 #[repr(C)]
 #[allow(non_camel_case_types)]

@@ -1,12 +1,23 @@
-use std::{ffi::CString, io, mem::MaybeUninit, slice};
+use std::{
+    borrow::Cow,
+    ffi::{CStr, CString},
+    io::{Error, ErrorKind, Result},
+    mem::MaybeUninit,
+    path::Path,
+    slice,
+};
 
+mod bytes;
 mod ffi;
+
+pub use crate::bytes::{Bytes, BytesMut};
 
 pub struct KazeState {
     ptr: *mut ffi::kz_State,
 }
 
 unsafe impl Send for KazeState {}
+unsafe impl Sync for KazeState {}
 
 impl Drop for KazeState {
     fn drop(&mut self) {
@@ -15,38 +26,38 @@ impl Drop for KazeState {
 }
 
 impl KazeState {
-    pub fn unlink(name: &str) -> io::Result<()> {
-        let name = CString::new(name)?;
+    pub fn unlink(name: impl AsRef<Path>) -> Result<()> {
+        let name = CString::new(name.as_ref().to_string_lossy().as_bytes())?;
         match unsafe { ffi::kz_unlink(name.as_ptr()) } {
             ffi::KZ_OK => Ok(()),
-            code => Err(io::Error::from_raw_os_error(code as i32)),
+            code => Err(Error::from_raw_os_error(code as i32)),
         }
     }
 
-    pub fn new(name: &str, ident: u32, bufsize: usize) -> io::Result<Self> {
-        let name = CString::new(name)?;
+    pub fn new(
+        name: impl AsRef<Path>,
+        ident: u32,
+        bufsize: usize,
+    ) -> Result<Self> {
+        let name = CString::new(name.as_ref().to_string_lossy().as_bytes())?;
         let ptr = unsafe { ffi::kz_new(name.as_ptr(), ident, bufsize) };
         if ptr.is_null() {
-            return Err(io::Error::last_os_error());
+            return Err(Error::last_os_error());
         }
         Ok(Self { ptr })
     }
 
-    pub fn open(name: &str) -> io::Result<Self> {
-        let name = CString::new(name)?;
+    pub fn open(name: impl AsRef<Path>) -> Result<Self> {
+        let name = CString::new(name.as_ref().to_string_lossy().as_bytes())?;
         let ptr = unsafe { ffi::kz_open(name.as_ptr()) };
         if ptr.is_null() {
-            return Err(io::Error::last_os_error());
+            return Err(Error::last_os_error());
         }
         Ok(Self { ptr })
     }
 
-    pub fn name(&self) -> &str {
-        unsafe {
-            std::ffi::CStr::from_ptr(ffi::kz_name(self.ptr))
-                .to_str()
-                .unwrap()
-        }
+    pub fn name(&self) -> Cow<'_, str> {
+        unsafe { CStr::from_ptr(ffi::kz_name(self.ptr)) }.to_string_lossy()
     }
 
     pub fn ident(&self) -> u32 {
@@ -89,7 +100,7 @@ impl KazeState {
                 raw: unsafe { ctx.assume_init() },
                 _marker: std::marker::PhantomData,
             }),
-            code => Err(Error { code }),
+            code => Err(error_from_raw(code)),
         }
     }
 
@@ -100,7 +111,7 @@ impl KazeState {
                 raw: unsafe { ctx.assume_init() },
                 _marker: std::marker::PhantomData,
             }),
-            code => Err(Error { code }),
+            code => Err(error_from_raw(code)),
         }
     }
 
@@ -117,7 +128,7 @@ impl KazeState {
                 raw: unsafe { ctx.assume_init() },
                 _marker: std::marker::PhantomData,
             }),
-            code => Err(Error { code }),
+            code => Err(error_from_raw(code)),
         }
     }
 
@@ -128,7 +139,7 @@ impl KazeState {
                 raw: unsafe { ctx.assume_init() },
                 _marker: std::marker::PhantomData,
             }),
-            code => Err(Error { code }),
+            code => Err(error_from_raw(code)),
         }
     }
 
@@ -139,7 +150,7 @@ impl KazeState {
                 raw: unsafe { ctx.assume_init() },
                 _marker: std::marker::PhantomData,
             }),
-            code => Err(Error { code }),
+            code => Err(error_from_raw(code)),
         }
     }
 
@@ -152,7 +163,7 @@ impl KazeState {
                 raw: unsafe { ctx.assume_init() },
                 _marker: std::marker::PhantomData,
             }),
-            code => Err(Error { code }),
+            code => Err(error_from_raw(code)),
         }
     }
 }
@@ -162,8 +173,10 @@ pub struct PushContext<'a> {
     _marker: std::marker::PhantomData<&'a ()>,
 }
 
+unsafe impl Send for PushContext<'_> {}
+
 impl PushContext<'_> {
-    pub fn buffer_mut(&mut self) -> (&mut [u8], &mut [u8]) {
+    pub fn buffer_mut(&mut self) -> BytesMut<'_> {
         unsafe fn slice_from_raw<'a>(p: *mut i8, len: usize) -> &'a mut [u8] {
             if len == 0 {
                 &mut []
@@ -171,19 +184,19 @@ impl PushContext<'_> {
                 unsafe { slice::from_raw_parts_mut(p.cast(), len) }
             }
         }
+        let mut len1: usize = 0;
+        let mut len2: usize = 0;
         unsafe {
-            let mut len1: usize = 0;
             let p1 = ffi::kz_push_buffer(&mut self.raw, 0, &mut len1);
-            let mut len2: usize = 0;
             let p2 = ffi::kz_push_buffer(&mut self.raw, 1, &mut len2);
-            (slice_from_raw(p1, len1), slice_from_raw(p2, len2))
+            BytesMut::new((slice_from_raw(p1, len1), slice_from_raw(p2, len2)))
         }
     }
 
     pub fn commit(mut self, len: usize) -> Result<()> {
         match unsafe { ffi::kz_push_commit(&mut self.raw, len) } {
             ffi::KZ_OK => Ok(()),
-            code => Err(Error { code }),
+            code => Err(error_from_raw(code)),
         }
     }
 }
@@ -193,9 +206,11 @@ pub struct PopContext<'a> {
     _marker: std::marker::PhantomData<&'a ()>,
 }
 
+unsafe impl Send for PopContext<'_> {}
+
 impl PopContext<'_> {
     #[inline]
-    pub fn buffer(&self) -> (&[u8], &[u8]) {
+    pub fn buffer(&self) -> Bytes<'_> {
         unsafe fn slice_from_raw<'a>(p: *const i8, len: usize) -> &'a [u8] {
             if len == 0 {
                 &[]
@@ -204,10 +219,12 @@ impl PopContext<'_> {
             }
         }
         let mut len1 = 0usize;
-        let p1 = unsafe { ffi::kz_pop_buffer(&self.raw, 0, &mut len1) };
         let mut len2 = 0usize;
-        let p2 = unsafe { ffi::kz_pop_buffer(&self.raw, 1, &mut len2) };
-        unsafe { (slice_from_raw(p1, len1), slice_from_raw(p2, len2)) }
+        unsafe {
+            let p1 = ffi::kz_pop_buffer(&self.raw, 0, &mut len1);
+            let p2 = ffi::kz_pop_buffer(&self.raw, 1, &mut len2);
+            Bytes::new((slice_from_raw(p1, len1), slice_from_raw(p2, len2)))
+        }
     }
 
     #[inline]
@@ -216,39 +233,14 @@ impl PopContext<'_> {
     }
 }
 
-pub type Result<T, E = Error> = std::result::Result<T, E>;
-
-pub struct Error {
-    code: i32,
-}
-
-impl std::error::Error for Error {}
-
-impl std::fmt::Debug for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "KazeError({})", self)
-    }
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.code > ffi::KZ_LASTERR {
-            write!(
-                f,
-                "{}",
-                match self.code {
-                    ffi::KZ_OK => "KZ_OK",
-                    ffi::KZ_FAIL => "KZ_FAIL",
-                    ffi::KZ_CLOSED => "KZ_CLOSED",
-                    ffi::KZ_INVALID => "KZ_INVALID",
-                    ffi::KZ_TOOBIG => "KZ_TOOBIG",
-                    ffi::KZ_BUSY => "KZ_BUSY",
-                    ffi::KZ_TIMEOUT => "KZ_TIMEOUT",
-                    _ => unreachable!(),
-                }
-            )
-        } else {
-            write!(f, "Code({})", self.code)
-        }
+fn error_from_raw(code: i32) -> Error {
+    match code {
+        ffi::KZ_FAIL => Error::last_os_error(),
+        ffi::KZ_CLOSED => Error::new(ErrorKind::BrokenPipe, "KZ_CLOSED"),
+        ffi::KZ_INVALID => Error::new(ErrorKind::InvalidInput, "KZ_INVALID"),
+        ffi::KZ_TOOBIG => Error::new(ErrorKind::FileTooLarge, "KZ_TOOBIG"),
+        ffi::KZ_BUSY => Error::new(ErrorKind::WouldBlock, "KZ_BUSY"),
+        ffi::KZ_TIMEOUT => Error::new(ErrorKind::TimedOut, "KZ_TIMEOUT"),
+        _ => Error::other(format!("Unknown error({})", code)),
     }
 }

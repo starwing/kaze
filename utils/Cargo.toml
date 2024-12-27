@@ -15,6 +15,7 @@ path = "src/echo/main.rs"
 anyhow = "1.0.95"
 clap = "4.5.23"
 rustyline = "15.0.0"
+bytes = "1.9.0"
 
 [dependencies.kaze_core]
 path = "../core"

@@ -1,5 +1,6 @@
 use std::{io, panic, thread};
 
+use bytes::BufMut;
 use rustyline::error::ReadlineError;
 
 fn main() -> anyhow::Result<()> {
@@ -30,14 +31,10 @@ fn main() -> anyhow::Result<()> {
 
     let t = thread::spawn(move || -> anyhow::Result<()> {
         loop {
-            let data = netside.pop()?;
-            let (l, r) = data.buffer();
-            println!(
-                "{}{}",
-                String::from_utf8_lossy(l),
-                String::from_utf8_lossy(r)
-            );
-            data.commit();
+            let ctx = netside.pop()?;
+            let buf = ctx.buffer();
+            println!("Got data! size={} data={}", buf.len(), buf);
+            ctx.commit();
         }
     });
     loop {
@@ -45,13 +42,7 @@ fn main() -> anyhow::Result<()> {
             Ok(line) => {
                 println!("You said: <{}>", line);
                 let mut ctx = hostside.push(line.len())?;
-                let (p1, p2) = ctx.buffer_mut();
-                let first = line.len().min(p1.len());
-                p1[..first].copy_from_slice(&line.as_bytes()[..first]);
-                if p1.len() < line.len() {
-                    let remain = line.len() - p1.len();
-                    p2[..remain].copy_from_slice(&line.as_bytes()[p1.len()..]);
-                }
+                ctx.buffer_mut().put_slice(line.as_bytes());
                 ctx.commit(line.len())?;
                 println!("after push");
             }

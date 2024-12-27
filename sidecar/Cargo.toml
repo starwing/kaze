@@ -1,0 +1,37 @@
+[package]
+name = "kaze_sidecar"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[dependencies]
+log = "0.4.22"
+metrics = "0.24.1"
+consul = "0.4.2"
+bugreport = "0.5.0"
+http = "1.2.0"
+page_size = "0.6.0"
+prost = "0.13.4"
+bytes = "1.9.0"
+
+[dependencies.kaze_core]
+path = "../core"
+
+[dependencies.tokio]
+version = "1.42.0"
+features = ["full"]
+
+[dependencies.tokio-util]
+version = "0.7.13"
+features = ["full"]
+
+[dependencies.tokio-stream]
+version = "0.1.17"
+features = ["full"]
+
+[dependencies.clap]
+version = "4.5.23"
+features = ["cargo", "derive"]
+
+[build-dependencies]
+prost-build = "0.13.4"
