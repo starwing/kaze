@@ -8,10 +8,20 @@ message Hdr {
   uint32 ack = 4;
 
   oneof routeType {
+    // send pkg to dstIdent
     uint32 dstIdent = 5;
-    uint32 dstRandMask = 6;
-    uint32 dstBroadcastMask = 7;
+    // send pkg to one of idents that match ident with mask
+    DstMask dstRandom = 6;
+    // send pkg to all idents that match ident with mask
+    DstMask dstBroadcast = 7;
+    // send pkg to all idents that match ident with mask
     DstMulticast dstMulticast = 8;
+  }
+
+  // ident selector with mask. only match if dstIdent & mask == ident
+  message DstMask {
+    uint32 ident = 1;
+    uint32 mask = 2;
   }
 
   message DstMulticast {

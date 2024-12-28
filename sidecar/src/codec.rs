@@ -126,6 +126,7 @@ pub fn decode_packet<'a>(src: &mut kaze_core::Bytes) -> io::Result<kaze::Hdr> {
 ///
 /// layouyt:
 /// [hdr_size(4)][hdr][body]
+#[allow(dead_code)]
 pub fn encode_packet(
     src: &mut kaze_core::BytesMut,
     item: (kaze::Hdr, impl Buf),

@@ -1,0 +1,19 @@
+shmfile = "kaze_shm"
+ident = "0.0.0.1"
+listen = "0.0.0.0:6081"
+sq_bufsize = 65536
+cq_bufsize = 65536
+pack_bufsize = 65536
+threads = 0
+
+[[nodes]]
+ident = "0.0.0.1"
+addr = "127.0.0.1:6081"
+
+[[nodes]]
+ident = "0.0.0.2"
+addr = "127.0.0.1:6082"
+
+[[nodes]]
+ident = "0.0.0.3"
+addr = "127.0.0.1:6083"
