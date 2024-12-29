@@ -26,12 +26,15 @@ typedef struct kz_State       kz_State;
 typedef struct kz_PushContext kz_PushContext;
 typedef struct kz_PopContext  kz_PopContext;
 
-KZ_API int kz_exists(const char *name);
-KZ_API int kz_unlink(const char *name);
+KZ_API size_t kz_aligned_bufsize(size_t required_size, size_t page_size);
+KZ_API int    kz_exists(const char *name);
+KZ_API int    kz_unlink(const char *name);
 
 KZ_API kz_State *kz_new(const char *name, uint32_t ident, size_t bufsize);
 KZ_API kz_State *kz_open(const char *name);
-KZ_API void      kz_delete(kz_State *S);
+
+KZ_API void kz_shutdown(kz_State *S);
+KZ_API void kz_delete(kz_State *S);
 
 /* info */
 
@@ -133,6 +136,14 @@ static size_t kz_get_aligned_size(size_t size, size_t align) {
 static size_t kz_requested_size(size_t size) {
     assert(kz_is_aligned_to(size, sizeof(uint32_t)));
     return kz_get_aligned_size(size + sizeof(kz_StateHdr), KZ_ALIGN);
+}
+
+KZ_API size_t kz_aligned_bufsize(size_t required_size, size_t page_size) {
+    required_size = kz_get_aligned_size(required_size, page_size)
+                    - sizeof(kz_StateHdr);
+    if (!kz_is_aligned_to(required_size, KZ_ALIGN))
+        required_size &= ~(KZ_ALIGN - 1);
+    return required_size;
 }
 
 static size_t kz_space_size(kz_State *S) {
@@ -620,10 +631,14 @@ static int kz_open_raw(kz_State *S, const char *filename) {
     return KZ_OK;
 }
 
-KZ_API void kz_delete(kz_State *S) {
+KZ_API void kz_shutdown(kz_State *S) {
     __atomic_store_n(&S->hdr->closed, 1, __ATOMIC_RELAXED);
     kz_futex_wake(&S->hdr->used, 1);
     kz_futex_wake(&S->hdr->need, 1);
+}
+
+KZ_API void kz_delete(kz_State *S) {
+    if (!__atomic_load_n(&S->hdr->closed, __ATOMIC_ACQUIRE)) kz_shutdown(S);
     munmap(S->hdr, S->shmsize);
     close(S->shm_fd);
     free(S);

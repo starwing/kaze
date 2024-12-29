@@ -32,13 +32,13 @@ impl Dispatcher {
     }
 
     /// dispatch a packet
-    #[instrument(level = "trace", skip(self, reg, resolver, hdr, data))]
+    #[instrument(level = "trace", skip(self, hdr, data, reg, resolver))]
     pub async fn dispatch(
         &self,
-        reg: &Arc<Register>,
-        resolver: &Resolver,
         hdr: &kaze::Hdr,
         data: &kaze_core::Bytes<'_>,
+        reg: &Arc<Register>,
+        resolver: &Resolver,
     ) -> Result<()> {
         if hdr.route_type.is_none() {
             counter!("kaze_dispatch_errors_total", "bodyType" => hdr.body_type.clone())
@@ -47,34 +47,34 @@ impl Dispatcher {
         }
         match hdr.route_type.as_ref().unwrap() {
             DstIdent(ident) => {
-                self.dispatch_to(reg, resolver, *ident, data).await
+                self.dispatch_to(*ident, data, reg, resolver).await
             }
             DstRandom(mask) => {
-                self.dispatch_to_random(reg, resolver, *mask, data).await
+                self.dispatch_to_random(*mask, data, reg, resolver).await
             }
             DstBroadcast(mask) => {
-                self.dispatch_to_broadcast(reg, resolver, *mask, data).await
+                self.dispatch_to_broadcast(*mask, data, reg, resolver).await
             }
             DstMulticast(multicast) => {
                 let idents = multicast.dst_idents.iter().cloned();
-                self.dispatch_to_multicast(reg, resolver, idents, &data)
+                self.dispatch_to_multicast(idents, &data, reg, resolver)
                     .await
             }
         }
         .context("Failed to dispatch packet")
     }
 
-    #[instrument(level = "trace", skip(self, reg, resolver, data))]
+    #[instrument(level = "trace", skip(self, ident, data, reg, resolver))]
     async fn dispatch_to(
         &self,
-        reg: &Arc<Register>,
-        resolver: &resolver::Resolver,
         ident: u32,
         data: &kaze_core::Bytes<'_>,
+        reg: &Arc<Register>,
+        resolver: &resolver::Resolver,
     ) -> Result<()> {
         // 1. find a node
         let sock_write = reg
-            .find_socket(resolver, ident)
+            .find_socket(ident, resolver)
             .await
             .context("Failed to find socket")?;
 
@@ -86,13 +86,13 @@ impl Dispatcher {
 
     async fn dispatch_to_multicast(
         &self,
-        reg: &Arc<Register>,
-        resolver: &Resolver,
         idents: impl Iterator<Item = u32>,
         data: &kaze_core::Bytes<'_>,
+        reg: &Arc<Register>,
+        resolver: &resolver::Resolver,
     ) -> Result<()> {
         let mut stream = idents
-            .map(|ident| self.dispatch_to(reg, resolver, ident, &data))
+            .map(|ident| self.dispatch_to(ident, &data, reg, resolver))
             .collect::<futures::stream::FuturesUnordered<_>>();
         while let Some(e) = stream.next().await {
             e.context("Failed to dispatch packet in multicast")?;
@@ -102,14 +102,14 @@ impl Dispatcher {
 
     async fn dispatch_to_random(
         &self,
-        reg: &Arc<Register>,
-        resolver: &resolver::Resolver,
         mask: DstMask,
         data: &kaze_core::Bytes<'_>,
+        reg: &Arc<Register>,
+        resolver: &resolver::Resolver,
     ) -> Result<()> {
         let idents = resolver.get_mask_nodes(mask.ident, mask.mask).await;
         if let Some((ident, _)) = idents.choose(&mut rand::thread_rng()) {
-            self.dispatch_to(reg, resolver, *ident, data)
+            self.dispatch_to(*ident, data, reg, resolver)
                 .await
                 .context("Failed to dispatch packet in random")?
         }
@@ -118,17 +118,17 @@ impl Dispatcher {
 
     async fn dispatch_to_broadcast(
         &self,
-        reg: &Arc<Register>,
-        resolver: &resolver::Resolver,
         mask: DstMask,
         data: &kaze_core::Bytes<'_>,
+        reg: &Arc<Register>,
+        resolver: &resolver::Resolver,
     ) -> Result<()> {
         // 1. find a node
         let nodes = resolver.get_mask_nodes(mask.ident, mask.mask).await;
         let idents = nodes.iter().map(|(ident, _)| *ident);
 
         // 2. transfer the packet
-        self.dispatch_to_multicast(reg, resolver, idents, data)
+        self.dispatch_to_multicast(idents, data, reg, resolver)
             .await
             .context("Failed to dispatch packet in multicast")
     }

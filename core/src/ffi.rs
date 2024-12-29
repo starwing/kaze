@@ -30,6 +30,9 @@ pub struct kz_PopContext {
 
 #[link(name = "kaze")]
 extern "C" {
+    pub fn kz_aligned_bufsize(required_size: usize, page_size: usize)
+        -> usize;
+
     pub fn kz_exists(name: *const c_char) -> i32;
     pub fn kz_unlink(name: *const c_char) -> i32;
 
@@ -41,6 +44,7 @@ extern "C" {
 
     pub fn kz_open(name: *const c_char) -> *mut kz_State;
 
+    pub fn kz_shutdown(S: *mut kz_State);
     pub fn kz_delete(S: *mut kz_State);
 
     pub fn kz_name(S: *const kz_State) -> *const i8;

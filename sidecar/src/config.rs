@@ -65,7 +65,7 @@ pub struct Args {
     pub config: PathBuf,
 
     /// Unlink shared memory object if it exists
-    #[arg(short = 'u', long = "unlink")]
+    #[arg(short = 'u', long = "unlink", action = clap::ArgAction::SetTrue)]
     pub unlink: bool,
 
     /// Name of the shared memory object
@@ -113,7 +113,7 @@ pub struct Args {
     /// live time (as second) of resolver mask cache
     #[arg(long)]
     #[default(1)]
-    pub resolver_time: u64,
+    pub resolver_livetime: u64,
 
     /// timeout (as millisecond) for pending connection
     #[arg(long)]
@@ -125,22 +125,24 @@ pub struct Args {
     #[default(60_000)]
     pub idle_timeout: u64,
 
-    /// log file path
-    #[arg(skip)]
-    pub log: Option<LogFileInfo>,
-
     /// prometheus endpoint
     #[arg(short = 'p', long = "prometheus")]
     pub prometheus: Option<SocketAddr>,
 
     /// prometheus push gateway
     #[arg(skip)]
-    #[default(Default::default())]
     pub prometheus_push: Option<PrometheusPush>,
 
     /// local ident mapping
     #[arg(skip)]
     pub nodes: Vec<Node>,
+
+    /// log file path
+    #[arg(skip)]
+    pub log: Option<LogFileInfo>,
+
+    #[arg(skip)]
+    pub rate_limit: Option<RateLimitInfo>,
 
     /// host command line to run after sidecar started
     #[arg(last = false)]
@@ -247,6 +249,35 @@ where
     }
 
     deserializer.deserialize_str(Visitor)
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct RateLimitInfo {
+    pub max: usize,
+    pub initial: usize,
+    pub refill: usize,
+
+    #[serde(default = "default_interval")]
+    pub interval: Duration,
+
+    pub per_msg: Vec<PerMsgLimitInfo>,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct PerMsgLimitInfo {
+    pub ident: Option<Ipv4Addr>,
+    pub body_type: Option<String>,
+
+    pub max: usize,
+    pub initial: usize,
+    pub refill: usize,
+
+    #[serde(default = "default_interval")]
+    pub interval: Duration,
+}
+
+fn default_interval() -> Duration {
+    Duration::from_secs(1)
 }
 
 fn get_page_size() -> usize {

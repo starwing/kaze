@@ -1,6 +1,7 @@
 mod codec;
 mod config;
 mod dispatcher;
+mod ratelimit;
 mod register;
 mod resolver;
 mod kaze {
@@ -13,8 +14,11 @@ use std::sync::Arc;
 use anyhow::{bail, Context, Result};
 use kaze_core::KazeState;
 use metrics::counter;
+use ratelimit::RateLimit;
+use tokio::select;
 use tokio::{net::TcpListener, task::block_in_place, try_join};
-use tracing::{error, info, span, trace, Level};
+use tracing::level_filters::LevelFilter;
+use tracing::{error, info, instrument, span, trace, warn, Level};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use crate::config::LogFileInfo;
@@ -27,11 +31,22 @@ async fn main() -> Result<()> {
     let app = config::parse_args().context("Failed to parse config")?;
     let (non_block, _guard) = LogFileInfo::build_writer(app.log.as_ref())?;
 
+    if let Some(rate_limit) = &app.rate_limit {
+        counter!("kaze_rate_limit_total")
+            .increment(rate_limit.per_msg.len() as u64);
+    }
+    let rate_limit = app.rate_limit.as_ref().map(|info| RateLimit::new(info));
+
     // install tracing with configuration
     tracing_subscriber::registry()
-        .with(EnvFilter::from_default_env())
         .with(tracing_subscriber::fmt::layer())
         .with(non_block.map(|non_block| fmt::layer().with_writer(non_block)))
+        .with(
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .with_env_var("KAZE_LOG")
+                .from_env_lossy(),
+        )
         .init();
 
     // our first log
@@ -63,16 +78,17 @@ async fn main() -> Result<()> {
 
     // create shm
     let (sq, cq) = new_kaze_pair(
-        app.shmfile,
+        &app.shmfile,
         &app.ident,
         app.sq_bufsize,
         app.cq_bufsize,
         app.unlink,
     )
     .context("Failed to create kaze shm queue")?;
-    info!("create kaze shm");
+    info!("submission queue created name={}", sq.name());
+    info!("completion queue created name={}", sq.name());
 
-    let resolver = Resolver::new(app.resolver_cache, app.resolver_time);
+    let resolver = Resolver::new(app.resolver_cache, app.resolver_livetime);
     for node in app.nodes {
         resolver.add_node(node.ident.to_bits(), node.addr).await;
     }
@@ -84,8 +100,13 @@ async fn main() -> Result<()> {
         info!("start host command");
     }
 
-    let reg =
-        Arc::new(Register::new(sq, app.pending_timeout, app.idle_timeout));
+    let sq_shutdown = sq.shutdown_guard();
+    let reg = Arc::new(Register::new(
+        sq,
+        rate_limit,
+        app.pending_timeout,
+        app.idle_timeout,
+    ));
     let dispatcher = Dispatcher::new();
 
     // start listening at last
@@ -94,42 +115,85 @@ async fn main() -> Result<()> {
         .context("Failed to bind local address")?;
     info!(addr = app.listen, "start listening");
 
+    let exit_notify = Arc::new(tokio::sync::Notify::new());
+    {
+        let cq_shutdown = cq.shutdown_guard();
+        let exit_notify = exit_notify.clone();
+        tokio::spawn(async move {
+            tokio::signal::ctrl_c()
+                .await
+                .expect("Failed to wait for ctrl-c");
+            info!("ctrl-c received");
+            exit_notify.notify_waiters();
+            drop(cq_shutdown);
+        });
+    }
+
     try_join!(
-        handle_listener(listener, &reg, &resolver),
-        handle_completion_queue(cq, &reg, &resolver, &dispatcher)
+        handle_listener(&listener, &exit_notify, &reg, &resolver),
+        handle_completion_queue(cq, &dispatcher, &reg, &resolver)
     )
     .context("Failed to in main loop")?;
+
+    info!("begin graceful exiting ...");
+    reg.graceful_exit().await?;
+    info!("graceful exited");
+
+    // notify host process to exit.
+    // must be called before exit, because `sq` has moved into `reg`, and it
+    // drops **before** sq_shutdown, makes a crash.
+    drop(sq_shutdown);
+    info!("submission queue closed");
+    unlink_kaze_pair(&app.shmfile, &app.ident)?;
+    info!("kaze shared memory files unlinked");
     Ok(())
 }
 
+#[instrument(level = "trace", skip(listener, exit_notify, reg, resolver))]
 async fn handle_listener(
-    listener: TcpListener,
+    listener: &TcpListener,
+    exit_notify: &Arc<tokio::sync::Notify>,
     reg: &Arc<Register>,
     resolver: &Resolver,
 ) -> Result<()> {
     loop {
-        let (socket, addr) = listener.accept().await?;
+        let (socket, addr) = select! {
+            r = listener.accept() => r?,
+            _ = exit_notify.notified() => {
+                info!("stop listening");
+                return Ok(());
+            }
+        };
         info!(addr = %addr, "Accepted connection");
-        reg.handle_incomming(resolver, socket, addr).await?;
+        reg.handle_incomming(socket, addr, resolver).await?;
     }
 }
 
+#[instrument(level = "trace", skip(cq, dispatcher, reg, resolver))]
 async fn handle_completion_queue(
     mut cq: KazeState,
+    dispatcher: &Dispatcher,
     reg: &Arc<Register>,
     resolver: &Resolver,
-    dispatcher: &Dispatcher,
 ) -> Result<()> {
     loop {
         let ctx = match cq.try_pop() {
             Ok(ctx) => ctx,
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 counter!("kaze_pop_blocking_total").increment(1);
-                block_in_place(|| cq.pop()).map_err(|e| {
-                    counter!("kaze_pop_blocking_errors_total").increment(1);
-                    error!(error = %e, "Error reading from blocking kaze");
-                    e
-                })?
+                match block_in_place(|| cq.pop()) {
+                    Ok(ctx) => ctx,
+                    Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+                        info!("completion queue closed");
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        counter!("kaze_pop_blocking_errors_total")
+                            .increment(1);
+                        error!(error = %e, "Error reading from blocking kaze");
+                        return Err(e.into());
+                    }
+                }
             }
             Err(e) => {
                 counter!("kaze_pop_errors_total").increment(1);
@@ -140,7 +204,7 @@ async fn handle_completion_queue(
 
         let mut data = ctx.buffer();
         let hdr = codec::decode_packet(&mut data)?;
-        if let Err(e) = dispatcher.dispatch(&reg, resolver, &hdr, &data).await
+        if let Err(e) = dispatcher.dispatch(&hdr, &data, &reg, resolver).await
         {
             counter!("kaze_dispatch_errors_total").increment(1);
             error!("Error dispatching packet: {e}");
@@ -159,8 +223,7 @@ fn new_kaze_pair(
     cq_bufsize: usize,
     unlink: bool,
 ) -> Result<(KazeState, KazeState)> {
-    let sq_name = format!("{}_sq_{}", prefix.as_ref(), ident);
-    let cq_name = format!("{}_sq_{}", prefix.as_ref(), ident);
+    let (sq_name, cq_name) = get_kaze_pair_names(prefix, ident);
     let ident = ident.to_bits();
 
     if KazeState::exists(&sq_name).context("Failed to check shm queue")? {
@@ -175,13 +238,18 @@ fn new_kaze_pair(
                 receiver
             );
         } else {
-            KazeState::unlink(&sq_name)
-                .context("Failed to unlink submission queue")?;
-            KazeState::unlink(&cq_name)
-                .context("Failed to unlink completion queue")?;
+            if let Err(e) = KazeState::unlink(&sq_name) {
+                warn!(error = %e, "Failed to unlink submission queue");
+            }
+            if let Err(e) = KazeState::unlink(&cq_name) {
+                warn!(error = %e, "Failed to unlink completion queue");
+            }
         }
     }
 
+    let page_size = page_size::get();
+    let sq_bufsize = KazeState::aligned_bufsize(sq_bufsize, page_size);
+    let cq_bufsize = KazeState::aligned_bufsize(cq_bufsize, page_size);
     let mut sq = KazeState::new(&sq_name, ident, sq_bufsize)
         .context("Failed to create submission queue")?;
     let mut cq = KazeState::new(&cq_name, ident, cq_bufsize)
@@ -189,4 +257,22 @@ fn new_kaze_pair(
     sq.set_owner(Some(sq.pid()), None);
     cq.set_owner(None, Some(cq.pid()));
     Ok((sq, cq))
+}
+
+fn unlink_kaze_pair(prefix: impl AsRef<str>, ident: &Ipv4Addr) -> Result<()> {
+    let (sq_name, cq_name) = get_kaze_pair_names(prefix, ident);
+    KazeState::unlink(&sq_name)
+        .context("Failed to unlink submission queue")?;
+    KazeState::unlink(&cq_name)
+        .context("Failed to unlink completion queue")?;
+    Ok(())
+}
+
+fn get_kaze_pair_names(
+    prefix: impl AsRef<str>,
+    ident: &Ipv4Addr,
+) -> (String, String) {
+    let sq_name = format!("{}_sq_{}", prefix.as_ref(), ident);
+    let cq_name = format!("{}_cq_{}", prefix.as_ref(), ident);
+    (sq_name, cq_name)
 }

@@ -19,11 +19,13 @@ clap-serde-derive = "0.2.1"
 futures = "0.3.31"
 rand = "0.8.5"
 moka = { version = "0.12.8", features = ["future"] }
+anyhow = "1.0.95"
 tracing = "0.1.41"
 tracing-error = "0.2.1"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-anyhow = "1.0.95"
 tracing-appender = "0.2.3"
+leaky-bucket = { version = "1.1.2", features = ["tracing"] }
+tracing-core = "0.1.33"
 
 [dependencies.kaze_core]
 path = "../core"

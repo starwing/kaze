@@ -26,6 +26,15 @@ impl Drop for KazeState {
 }
 
 impl KazeState {
+    /// Calculate buffer size that is aligned to page size (with header)
+    ///
+    /// returns the buffer size that makes shared memory size requested aligned
+    /// to page size. so the returned size could a little less than the aligned
+    /// page size
+    pub fn aligned_bufsize(required_size: usize, page_size: usize) -> usize {
+        unsafe { ffi::kz_aligned_bufsize(required_size, page_size) }
+    }
+
     /// Check if shm queue exists
     pub fn exists(name: impl AsRef<Path>) -> Result<bool> {
         let name =
@@ -68,6 +77,10 @@ impl KazeState {
             return Err(Error::last_os_error());
         }
         Ok(Self { ptr })
+    }
+
+    pub fn shutdown_guard(&self) -> ShutdownGuard {
+        ShutdownGuard(self.ptr)
     }
 
     /// Queue name
@@ -263,6 +276,16 @@ impl PopContext<'_> {
     #[inline]
     pub fn commit(mut self) {
         unsafe { ffi::kz_pop_commit(&mut self.raw) }
+    }
+}
+
+pub struct ShutdownGuard(*mut ffi::kz_State);
+
+unsafe impl Send for ShutdownGuard {}
+
+impl Drop for ShutdownGuard {
+    fn drop(&mut self) {
+        unsafe { ffi::kz_shutdown(self.0) }
     }
 }
 

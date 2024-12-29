@@ -1,0 +1,181 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'meshcli'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=meshcli",
+                    "--package=meshcli"
+                ],
+                "filter": {
+                    "name": "meshcli",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'meshcli'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=meshcli",
+                    "--package=meshcli"
+                ],
+                "filter": {
+                    "name": "meshcli",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in library 'kaze_core'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--lib",
+                    "--package=kaze_core"
+                ],
+                "filter": {
+                    "name": "kaze_core",
+                    "kind": "lib"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'kaze_sidecar'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=kaze_sidecar",
+                    "--package=kaze_sidecar"
+                ],
+                "filter": {
+                    "name": "kaze_sidecar",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+                "-u"
+            ],
+            "env": {
+                "RUST_BACKTRACE": "1",
+                "RUST_LOG": "trace"
+            },
+            "cwd": "${workspaceFolder}/sidecar"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'kaze_sidecar'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=kaze_sidecar",
+                    "--package=kaze_sidecar"
+                ],
+                "filter": {
+                    "name": "kaze_sidecar",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'kaze_cli'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=kaze_cli",
+                    "--package=kaze_util"
+                ],
+                "filter": {
+                    "name": "kaze_cli",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'kaze_cli'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=kaze_cli",
+                    "--package=kaze_util"
+                ],
+                "filter": {
+                    "name": "kaze_cli",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'kaze_echo'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=kaze_echo",
+                    "--package=kaze_util"
+                ],
+                "filter": {
+                    "name": "kaze_echo",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'kaze_echo'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=kaze_echo",
+                    "--package=kaze_util"
+                ],
+                "filter": {
+                    "name": "kaze_echo",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}
