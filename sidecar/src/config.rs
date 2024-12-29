@@ -1,17 +1,24 @@
-use clap::{crate_version, Parser};
-use clap_serde_derive::ClapSerde;
-use log::info;
-use serde::Deserialize;
 use std::{
-    io::{Error, ErrorKind, Result},
     net::{Ipv4Addr, SocketAddr},
     path::PathBuf,
     str::FromStr,
     sync::LazyLock,
+    time::Duration,
+};
+
+use anyhow::{bail, Context, Result};
+use clap::{crate_version, Parser};
+use clap_serde_derive::ClapSerde;
+use serde::Deserialize;
+use tracing::info;
+use tracing_appender::{
+    non_blocking::{NonBlocking, WorkerGuard},
+    rolling::Rotation,
 };
 
 type OptArgs = <Args as ClapSerde>::Opt;
 
+/// parse command line arguments
 pub fn parse_args() -> Result<Args> {
     let mut args = Args::default();
     let opt_args = OptArgs::parse();
@@ -25,15 +32,17 @@ pub fn parse_args() -> Result<Args> {
 
     if let Some(config) = config_file {
         info!("use config file {}", config.display());
-        let file_args: OptArgs =
-            toml::from_str(&std::fs::read_to_string(config)?)
-                .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+        let file_args: OptArgs = toml::from_str(
+            &std::fs::read_to_string(config)
+                .context("Failed to read config file")?,
+        )
+        .context("Failed to parse config file")?;
         args = args.merge(file_args);
     }
 
     args = args.merge(opt_args);
 
-    args.validate()?;
+    args.validate().context("Failed to validate config")?;
     Ok(args)
 }
 
@@ -55,9 +64,13 @@ pub struct Args {
     #[default(PathBuf::new())]
     pub config: PathBuf,
 
+    /// Unlink shared memory object if it exists
+    #[arg(short = 'u', long = "unlink")]
+    pub unlink: bool,
+
     /// Name of the shared memory object
     #[arg(short = 'n', long = "name")]
-    pub shmfile: PathBuf,
+    pub shmfile: String,
 
     /// Identifier for the shared memory object
     #[arg(short, long)]
@@ -102,6 +115,29 @@ pub struct Args {
     #[default(1)]
     pub resolver_time: u64,
 
+    /// timeout (as millisecond) for pending connection
+    #[arg(long)]
+    #[default(500)]
+    pub pending_timeout: u64,
+
+    /// timeout (as millisecond) for idle connection
+    #[arg(long)]
+    #[default(60_000)]
+    pub idle_timeout: u64,
+
+    /// log file path
+    #[arg(skip)]
+    pub log: Option<LogFileInfo>,
+
+    /// prometheus endpoint
+    #[arg(short = 'p', long = "prometheus")]
+    pub prometheus: Option<SocketAddr>,
+
+    /// prometheus push gateway
+    #[arg(skip)]
+    #[default(Default::default())]
+    pub prometheus_push: Option<PrometheusPush>,
+
     /// local ident mapping
     #[arg(skip)]
     pub nodes: Vec<Node>,
@@ -115,22 +151,102 @@ pub struct Args {
 impl Args {
     pub fn validate(&self) -> Result<()> {
         if self.ident.to_bits() == 0 {
-            return Err(Error::new(ErrorKind::InvalidData, "ident required"));
+            bail!("ident required");
         }
-        if self.shmfile.as_os_str().is_empty() {
-            return Err(Error::new(
-                ErrorKind::InvalidData,
-                "shmfile required",
-            ));
+        if self.shmfile.is_empty() {
+            bail!("shmfile required");
         }
         Ok(())
     }
 }
 
+/// local ident -> node address mapping
 #[derive(Deserialize, Clone, Debug)]
 pub struct Node {
     pub ident: Ipv4Addr,
     pub addr: SocketAddr,
+}
+
+/// prometheus push gateway configuration
+#[derive(Deserialize, Clone, Debug)]
+pub struct PrometheusPush {
+    pub endpoint: String,
+    pub interval: Duration,
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
+/// log file configuration
+#[derive(Deserialize, Clone, Debug)]
+pub struct LogFileInfo {
+    pub directory: PathBuf,
+    pub prefix: String,
+    pub suffix: Option<String>,
+    pub max_count: usize,
+    #[serde(deserialize_with = "parse_rotation")]
+    pub rotation: Rotation,
+}
+
+impl LogFileInfo {
+    /// build non-blocking writer from configuration
+    pub fn build_writer(
+        conf: Option<&Self>,
+    ) -> Result<(Option<NonBlocking>, Option<WorkerGuard>)> {
+        Ok(conf
+            .and_then(|conf| {
+                let mut builder = tracing_appender::rolling::Builder::new();
+                if let Some(suffix) = &conf.suffix {
+                    builder = builder.filename_suffix(suffix);
+                }
+                Some(
+                    builder
+                        .filename_prefix(conf.prefix.clone())
+                        .max_log_files(conf.max_count)
+                        .rotation(conf.rotation.clone())
+                        .build(conf.directory.as_path())
+                        .context("Failed to build appender"),
+                )
+            })
+            .map_or(Ok(None), |r| r.map(Some))?
+            .map(|appender| NonBlocking::new(appender))
+            .map(|(non_block, guard)| (Some(non_block), Some(guard)))
+            .unwrap_or((None, None)))
+    }
+}
+
+pub fn parse_rotation<'de, D>(deserializer: D) -> Result<Rotation, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct Visitor;
+    impl<'de> serde::de::Visitor<'de> for Visitor {
+        type Value = Rotation;
+
+        fn expecting(
+            &self,
+            formatter: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            formatter.write_str("daily | hourly | minutely | never")
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            match v.to_lowercase().as_str() {
+                "daily" => Ok(Rotation::DAILY),
+                "hourly" => Ok(Rotation::HOURLY),
+                "minutely" => Ok(Rotation::MINUTELY),
+                "never" => Ok(Rotation::NEVER),
+                _ => Err(serde::de::Error::custom(format!(
+                    "Invalid rotation: {}",
+                    v
+                ))),
+            }
+        }
+    }
+
+    deserializer.deserialize_str(Visitor)
 }
 
 fn get_page_size() -> usize {

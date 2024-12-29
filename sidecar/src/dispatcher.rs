@@ -1,13 +1,11 @@
-use std::{
-    io::{Error, ErrorKind, IoSlice, Result},
-    sync::Arc,
-};
+use std::{io::IoSlice, sync::Arc};
 
-use futures::StreamExt;
-use log::error;
+use anyhow::{bail, Context, Result};
 use metrics::counter;
 use rand::seq::SliceRandom;
 use tokio::{io::AsyncWriteExt, net::tcp::OwnedWriteHalf, sync::Mutex};
+use tokio_stream::StreamExt;
+use tracing::instrument;
 
 use crate::{
     kaze::{
@@ -21,43 +19,52 @@ use crate::{
     resolver::{self, Resolver},
 };
 
+/// packet dispatcher
+///
+/// finds node that matches the route type, and transfer the packet to that node
+/// with socket connections.
 pub struct Dispatcher {}
 
 impl Dispatcher {
+    /// create a new dispatcher
     pub fn new() -> Dispatcher {
         Dispatcher {}
     }
 
+    /// dispatch a packet
+    #[instrument(level = "trace", skip(self, reg, resolver, hdr, data))]
     pub async fn dispatch(
         &self,
         reg: &Arc<Register>,
         resolver: &Resolver,
-        hdr: kaze::Hdr,
+        hdr: &kaze::Hdr,
         data: &kaze_core::Bytes<'_>,
     ) -> Result<()> {
         if hdr.route_type.is_none() {
-            counter!("kaze-dispatch-errors").increment(1);
-            error!("No route type for packet seq={}", hdr.seq);
-            return Err(Error::new(ErrorKind::Other, "No route type"));
+            counter!("kaze_dispatch_errors_total", "bodyType" => hdr.body_type.clone())
+                .increment(1);
+            bail!("no route type for packet seq={}", hdr.seq);
         }
-        match hdr.route_type.unwrap() {
+        match hdr.route_type.as_ref().unwrap() {
             DstIdent(ident) => {
-                self.dispatch_to(reg, resolver, ident, data).await
+                self.dispatch_to(reg, resolver, *ident, data).await
             }
             DstRandom(mask) => {
-                self.dispatch_to_random(reg, resolver, mask, data).await
+                self.dispatch_to_random(reg, resolver, *mask, data).await
             }
             DstBroadcast(mask) => {
-                self.dispatch_to_broadcast(reg, resolver, mask, data).await
+                self.dispatch_to_broadcast(reg, resolver, *mask, data).await
             }
             DstMulticast(multicast) => {
-                let idents = multicast.dst_idents.into_iter();
+                let idents = multicast.dst_idents.iter().cloned();
                 self.dispatch_to_multicast(reg, resolver, idents, &data)
                     .await
             }
         }
+        .context("Failed to dispatch packet")
     }
 
+    #[instrument(level = "trace", skip(self, reg, resolver, data))]
     async fn dispatch_to(
         &self,
         reg: &Arc<Register>,
@@ -66,10 +73,15 @@ impl Dispatcher {
         data: &kaze_core::Bytes<'_>,
     ) -> Result<()> {
         // 1. find a node
-        let sock_write = reg.find_socket(resolver, ident).await?;
+        let sock_write = reg
+            .find_socket(resolver, ident)
+            .await
+            .context("Failed to find socket")?;
 
         // 2. transfer the packet
-        Self::dispatch_to_socket(data, sock_write).await
+        Self::dispatch_to_socket(data, sock_write)
+            .await
+            .context("Failed to dispatch packet")
     }
 
     async fn dispatch_to_multicast(
@@ -83,7 +95,7 @@ impl Dispatcher {
             .map(|ident| self.dispatch_to(reg, resolver, ident, &data))
             .collect::<futures::stream::FuturesUnordered<_>>();
         while let Some(e) = stream.next().await {
-            e?;
+            e.context("Failed to dispatch packet in multicast")?;
         }
         Ok(())
     }
@@ -97,7 +109,9 @@ impl Dispatcher {
     ) -> Result<()> {
         let idents = resolver.get_mask_nodes(mask.ident, mask.mask).await;
         if let Some((ident, _)) = idents.choose(&mut rand::thread_rng()) {
-            self.dispatch_to(reg, resolver, *ident, data).await?
+            self.dispatch_to(reg, resolver, *ident, data)
+                .await
+                .context("Failed to dispatch packet in random")?
         }
         Ok(())
     }
@@ -116,6 +130,7 @@ impl Dispatcher {
         // 2. transfer the packet
         self.dispatch_to_multicast(reg, resolver, idents, data)
             .await
+            .context("Failed to dispatch packet in multicast")
     }
 
     async fn dispatch_to_socket(
@@ -132,8 +147,9 @@ impl Dispatcher {
                 IoSlice::new(s1),
                 IoSlice::new(s2),
             ])
-            .await?;
-        counter!("kaze-socket-written").increment(written as u64);
+            .await
+            .context("Failed to write to socket")?;
+        counter!("kaze_write_packets_total").increment(written as u64);
         Ok(())
     }
 }

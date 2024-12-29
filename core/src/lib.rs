@@ -26,6 +26,18 @@ impl Drop for KazeState {
 }
 
 impl KazeState {
+    /// Check if shm queue exists
+    pub fn exists(name: impl AsRef<Path>) -> Result<bool> {
+        let name =
+            CString::new(name.as_ref().to_string_lossy().as_bytes()).unwrap();
+        match unsafe { ffi::kz_exists(name.as_ptr()) } {
+            1 => Ok(true),
+            0 => Ok(false),
+            code => Err(Error::from_raw_os_error(code as i32)),
+        }
+    }
+
+    /// Unlink shm queue
     pub fn unlink(name: impl AsRef<Path>) -> Result<()> {
         let name = CString::new(name.as_ref().to_string_lossy().as_bytes())?;
         match unsafe { ffi::kz_unlink(name.as_ptr()) } {
@@ -34,6 +46,7 @@ impl KazeState {
         }
     }
 
+    /// Create new shm queue
     pub fn new(
         name: impl AsRef<Path>,
         ident: u32,
@@ -47,6 +60,7 @@ impl KazeState {
         Ok(Self { ptr })
     }
 
+    /// Open existing shm queue
     pub fn open(name: impl AsRef<Path>) -> Result<Self> {
         let name = CString::new(name.as_ref().to_string_lossy().as_bytes())?;
         let ptr = unsafe { ffi::kz_open(name.as_ptr()) };
@@ -56,26 +70,32 @@ impl KazeState {
         Ok(Self { ptr })
     }
 
+    /// Queue name
     pub fn name(&self) -> Cow<'_, str> {
         unsafe { CStr::from_ptr(ffi::kz_name(self.ptr)) }.to_string_lossy()
     }
 
+    /// Queue identifier
     pub fn ident(&self) -> u32 {
         unsafe { ffi::kz_ident(self.ptr) }
     }
 
+    /// current process id
     pub fn pid(&self) -> i32 {
         unsafe { ffi::kz_pid(self.ptr) }
     }
 
+    /// used bytess in queue
     pub fn used(&self) -> usize {
         unsafe { ffi::kz_used(self.ptr) }
     }
 
+    /// total bytes in queue
     pub fn size(&self) -> usize {
         unsafe { ffi::kz_size(self.ptr) }
     }
 
+    /// get owner pid of queue (sender, receiver)
     pub fn owner(&self) -> (i32, i32) {
         let mut sender = 0;
         let mut receiver = 0;
@@ -83,6 +103,7 @@ impl KazeState {
         (sender, receiver)
     }
 
+    /// set owner pid of queue
     pub fn set_owner(&mut self, sender: Option<i32>, receiver: Option<i32>) {
         unsafe {
             ffi::kz_set_owner(
@@ -93,6 +114,7 @@ impl KazeState {
         }
     }
 
+    /// try to push data, return the push context if succeed
     pub fn try_push(&mut self, len: usize) -> Result<PushContext<'_>> {
         let mut ctx = MaybeUninit::uninit();
         match unsafe { ffi::kz_try_push(self.ptr, ctx.as_mut_ptr(), len) } {
@@ -104,6 +126,7 @@ impl KazeState {
         }
     }
 
+    /// push data, blocking when queue is full
     pub fn push(&mut self, len: usize) -> Result<PushContext<'_>> {
         let mut ctx = MaybeUninit::uninit();
         match unsafe { ffi::kz_push(self.ptr, ctx.as_mut_ptr(), len) } {
@@ -115,6 +138,7 @@ impl KazeState {
         }
     }
 
+    /// push data, blocking when queue is full with timeout
     pub fn push_until(
         &mut self,
         len: usize,
@@ -132,6 +156,7 @@ impl KazeState {
         }
     }
 
+    /// try to pop data, return the pop context if succeed
     pub fn try_pop(&mut self) -> Result<PopContext<'_>> {
         let mut ctx = MaybeUninit::uninit();
         match unsafe { ffi::kz_try_pop(self.ptr, ctx.as_mut_ptr()) } {
@@ -143,6 +168,7 @@ impl KazeState {
         }
     }
 
+    /// pop data, blocking when queue is empty
     pub fn pop(&mut self) -> Result<PopContext<'_>> {
         let mut ctx = MaybeUninit::uninit();
         match unsafe { ffi::kz_pop(self.ptr, ctx.as_mut_ptr()) } {
@@ -154,6 +180,7 @@ impl KazeState {
         }
     }
 
+    /// pop data, blocking when queue is empty with timeout
     pub fn pop_until(&mut self, millis: u32) -> Result<PopContext<'_>> {
         let mut ctx = MaybeUninit::uninit();
         match unsafe {
@@ -168,6 +195,7 @@ impl KazeState {
     }
 }
 
+/// Push context used to copy data into queue
 pub struct PushContext<'a> {
     raw: ffi::kz_PushContext,
     _marker: std::marker::PhantomData<&'a ()>,
@@ -176,6 +204,7 @@ pub struct PushContext<'a> {
 unsafe impl Send for PushContext<'_> {}
 
 impl PushContext<'_> {
+    /// Returns a mutable reference to the write buffer.
     pub fn buffer_mut(&mut self) -> BytesMut<'_> {
         unsafe fn slice_from_raw<'a>(p: *mut i8, len: usize) -> &'a mut [u8] {
             if len == 0 {
@@ -193,6 +222,7 @@ impl PushContext<'_> {
         }
     }
 
+    /// Commit copied data with actual length
     pub fn commit(mut self, len: usize) -> Result<()> {
         match unsafe { ffi::kz_push_commit(&mut self.raw, len) } {
             ffi::KZ_OK => Ok(()),
@@ -201,6 +231,7 @@ impl PushContext<'_> {
     }
 }
 
+/// Pop context used to copy data from queue
 pub struct PopContext<'a> {
     raw: ffi::kz_PopContext,
     _marker: std::marker::PhantomData<&'a ()>,
@@ -209,6 +240,7 @@ pub struct PopContext<'a> {
 unsafe impl Send for PopContext<'_> {}
 
 impl PopContext<'_> {
+    /// Returns a reference to the read buffer.
     #[inline]
     pub fn buffer(&self) -> Bytes<'_> {
         unsafe fn slice_from_raw<'a>(p: *const i8, len: usize) -> &'a [u8] {
@@ -227,6 +259,7 @@ impl PopContext<'_> {
         }
     }
 
+    /// comfirm data has been consumed
     #[inline]
     pub fn commit(mut self) {
         unsafe { ffi::kz_pop_commit(&mut self.raw) }

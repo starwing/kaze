@@ -30,6 +30,7 @@ pub struct kz_PopContext {
 
 #[link(name = "kaze")]
 extern "C" {
+    pub fn kz_exists(name: *const c_char) -> i32;
     pub fn kz_unlink(name: *const c_char) -> i32;
 
     pub fn kz_new(

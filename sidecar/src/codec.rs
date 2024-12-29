@@ -1,5 +1,6 @@
-use std::io::{self, Error, ErrorKind};
+use std::io::{Error, ErrorKind};
 
+use anyhow::{bail, Context, Result};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use prost::Message;
 use tokio_util::codec::{Decoder, Encoder};
@@ -19,7 +20,7 @@ pub struct NetPacketCodec {}
 
 impl Decoder for NetPacketCodec {
     type Item = (kaze::Hdr, BytesMut);
-    type Error = Error;
+    type Error = anyhow::Error;
 
     fn decode(
         &mut self,
@@ -40,18 +41,16 @@ impl Decoder for NetPacketCodec {
         let mut reader = BufAdaptor::new(&data);
         let hdr_size = reader.get_u32_le() as usize;
         if hdr_size > size {
-            return Err(Error::new(
-                ErrorKind::InvalidData,
-                "Invalid packet header size",
-            ));
+            bail!("Invalid packet header size={} hdr_size={}", size, hdr_size);
         }
-        let hdr = kaze::Hdr::decode(reader.take(hdr_size))?;
+        let hdr = kaze::Hdr::decode(reader.take(hdr_size))
+            .context("Failed to decode packet")?;
         Ok(Some((hdr, data)))
     }
 }
 
 impl Encoder<(kaze::Hdr, Bytes)> for NetPacketCodec {
-    type Error = Error;
+    type Error = anyhow::Error;
 
     fn encode(
         &mut self,
@@ -74,7 +73,7 @@ pub struct NetPacketForwardCodec {}
 
 impl Decoder for NetPacketForwardCodec {
     type Item = BytesMut;
-    type Error = Error;
+    type Error = anyhow::Error;
 
     fn decode(
         &mut self,
@@ -100,25 +99,23 @@ impl Decoder for NetPacketForwardCodec {
 ///
 /// layouyt:
 /// [hdr_size(4)][hdr][body]
-pub fn decode_packet<'a>(src: &mut kaze_core::Bytes) -> io::Result<kaze::Hdr> {
+pub fn decode_packet<'a>(src: &mut kaze_core::Bytes) -> Result<kaze::Hdr> {
     // A KazeBytes should only be used once, it contains only one packet
     assert!(src.pos() == 0);
 
     if src.remaining() < size_of::<u32>() {
-        return Err(Error::new(
-            ErrorKind::InvalidData,
-            "No rooms for packet prefix",
-        ));
+        bail!("No rooms for packet prefix, remaining={}", src.remaining());
     }
     let hdr_size = src.get_u32_le() as usize;
     if hdr_size > src.remaining() {
-        return Err(Error::new(
-            ErrorKind::InvalidData,
-            "Invalid packet header size",
-        ));
+        bail!(
+            "Invalid packet header size={}, remaining={}",
+            hdr_size,
+            src.remaining()
+        );
     }
     let src = src.take(hdr_size);
-    Ok(kaze::Hdr::decode(src)?)
+    Ok(kaze::Hdr::decode(src).context("Failed to decode Hdr")?)
 }
 
 /// Encode a packet to a KazeBytesMut, KazeBytesMut created from KazeState,

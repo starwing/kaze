@@ -26,6 +26,7 @@ typedef struct kz_State       kz_State;
 typedef struct kz_PushContext kz_PushContext;
 typedef struct kz_PopContext  kz_PopContext;
 
+KZ_API int kz_exists(const char *name);
 KZ_API int kz_unlink(const char *name);
 
 KZ_API kz_State *kz_new(const char *name, uint32_t ident, size_t bufsize);
@@ -626,6 +627,12 @@ KZ_API void kz_delete(kz_State *S) {
     munmap(S->hdr, S->shmsize);
     close(S->shm_fd);
     free(S);
+}
+
+KZ_API int kz_exists(const char *filename) {
+    int shm_fd = shm_open(filename, O_RDWR, 0666);
+    if (shm_fd >= 0) return close(shm_fd), 1;
+    return errno == ENOENT ? 0 : -1;
 }
 
 KZ_API int kz_unlink(const char *filename) {

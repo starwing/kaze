@@ -3,13 +3,14 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use moka::future::Cache;
 use tokio::sync::Mutex;
 
-/// resolver
+/// resolve ident to node address
 pub struct Resolver {
     node_map: Mutex<HashMap<u32, SocketAddr>>,
     mask_cache: Cache<(u32, u32), Arc<Vec<(u32, SocketAddr)>>>,
 }
 
 impl Resolver {
+    /// create a new resolver
     pub fn new(cache_capactiy: usize, live_sec: u64) -> Self {
         Self {
             node_map: Mutex::new(HashMap::new()),
@@ -22,14 +23,19 @@ impl Resolver {
         }
     }
 
+    /// add a ident->node mapping
     pub async fn add_node(&self, ident: u32, addr: SocketAddr) {
         self.node_map.lock().await.insert(ident, addr);
     }
 
+    /// get node address by ident
     pub async fn get_node(&self, ident: u32) -> Option<SocketAddr> {
         self.node_map.lock().await.get(&ident).cloned()
     }
 
+    /// get node address list by ident and mask
+    ///
+    /// Returns all nodes that match `(ident & mask)`
     pub async fn get_mask_nodes(
         &self,
         ident: u32,
@@ -40,6 +46,7 @@ impl Resolver {
             .await
     }
 
+    /// calculate all nodes that match `(ident & mask)`
     async fn calc_mask_nodes(
         &self,
         ident: u32,
