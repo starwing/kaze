@@ -279,6 +279,7 @@ impl PopContext<'_> {
     }
 }
 
+#[derive(Debug)]
 pub struct ShutdownGuard(*mut ffi::kz_State);
 
 unsafe impl Send for ShutdownGuard {}

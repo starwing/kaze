@@ -1,19 +1,23 @@
-use std::fmt::{Display, Formatter};
-use std::net::Ipv4Addr;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{collections::HashMap, net::SocketAddr};
 
 use anyhow::{anyhow, bail, Context, Error, Result};
 use bytes::{BufMut, BytesMut};
 use metrics::{counter, gauge};
-use tokio::io::AsyncWriteExt;
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::sync::Mutex;
-use tokio::task::{block_in_place, JoinSet};
-use tokio::{net::TcpStream, select};
+use tokio::{
+    io::AsyncWriteExt,
+    net::{
+        tcp::{OwnedReadHalf, OwnedWriteHalf},
+        TcpStream,
+    },
+    select,
+    sync::Mutex,
+    task::{block_in_place, JoinSet},
+};
 use tokio_stream::StreamExt;
 use tokio_util::codec::{Decoder, FramedRead};
-use tracing::{enabled, error, instrument, trace};
+use tracing::{enabled, error, trace};
 
 use crate::codec::{NetPacketCodec, NetPacketForwardCodec};
 use crate::kaze::Hdr;
@@ -24,8 +28,8 @@ use crate::resolver::Resolver;
 pub struct Register {
     sock_map: Mutex<HashMap<SocketAddr, Arc<Mutex<OwnedWriteHalf>>>>,
     sq: Mutex<kaze_core::KazeState>,
-    pending_timeout: u64,
-    idle_timeout: u64,
+    pending_timeout: Duration,
+    idle_timeout: Duration,
     rate_limit: Option<RateLimit>,
     join_set: Mutex<JoinSet<()>>,
 }
@@ -35,21 +39,21 @@ impl Register {
     pub fn new(
         sq: kaze_core::KazeState,
         rate_limit: Option<RateLimit>,
-        pending_timeout: u64,
-        idle_timeout: u64,
+        pending_timeout: impl Into<Duration>,
+        idle_timeout: impl Into<Duration>,
     ) -> Self {
         Self {
             sock_map: Mutex::new(HashMap::new()),
             sq: Mutex::new(sq),
             rate_limit,
-            pending_timeout,
-            idle_timeout,
+            pending_timeout: pending_timeout.into(),
+            idle_timeout: idle_timeout.into(),
             join_set: Mutex::new(JoinSet::new()),
         }
     }
 
     /// gracefully exit
-    pub async fn graceful_exit(&self) -> Result<()> {
+    pub async fn graceful_exit(self: Arc<Self>) -> Result<()> {
         let mut join_set = self.join_set.lock().await;
         while let Some(res) = join_set.join_next().await {
             if let Err(e) = res {
@@ -60,7 +64,7 @@ impl Register {
     }
 
     /// handle incomming connection
-    #[instrument(level = "trace", skip(self, resolver))]
+    #[tracing::instrument(level = "trace", skip(self, resolver))]
     pub async fn handle_incomming(
         self: &Arc<Self>,
         stream: TcpStream,
@@ -76,7 +80,7 @@ impl Register {
                     println!("exit");
                     return Ok(());
                 },
-            _ = tokio::time::sleep(tokio::time::Duration::from_millis(self.pending_timeout)) => {
+            _ = tokio::time::sleep(self.pending_timeout) => {
                 counter!("kaze_read_timeout_total").increment(1);
                 println!("timeout");
                 return Ok(());
@@ -100,7 +104,7 @@ impl Register {
     }
 
     /// find a node that matches the ident
-    #[instrument(level = "trace", skip(self, resolver))]
+    #[tracing::instrument(level = "trace", skip(self, resolver))]
     pub async fn find_socket(
         self: &Arc<Self>,
         ident: u32,
@@ -204,12 +208,8 @@ impl Register {
         };
 
         if let Err(e) = r {
-            if e.downcast_ref::<ConnectionClosed>().is_some() {
-                counter!("kaze_read_closed_total").increment(1);
-            } else {
-                counter!("kaze_connection_errors_total").increment(1);
-                error!(error = %e, "Failed to handle connection");
-            }
+            counter!("kaze_connection_errors_total").increment(1);
+            error!(error = %e, "Failed to handle connection");
         }
 
         if let Err(e) = self.clone().close_connection(read_half, addr).await {
@@ -249,12 +249,7 @@ impl Register {
             if let Some((hdr, mut data)) = data {
                 trace!(hdr = ?hdr, len = data.len(), "transfer packet");
                 if let Some(limiter) = &self.rate_limit {
-                    limiter
-                        .acquire_one(
-                            &Ipv4Addr::from_bits(hdr.src_ident),
-                            &hdr.body_type,
-                        )
-                        .await;
+                    limiter.acquire_one(hdr.src_ident, &hdr.body_type).await;
                 }
                 self.transfer_pkg(&mut data)
                     .await
@@ -273,24 +268,20 @@ impl Register {
         D: Decoder,
         <D as Decoder>::Error: Into<Error>,
     {
-        let pkg = select! {
+        Ok(select! {
             pkg = transport.next() => {
                 if let Some(pkg) = pkg {
-                    Some(pkg?)
+                    Some(pkg.context("Failed to read packet")?)
                 } else {
                     counter!("kaze_read_closed_total").increment(1);
                     None
                 }
             },
-            _ = tokio::time::sleep(tokio::time::Duration::from_millis(self.idle_timeout)) => {
+            _ = tokio::time::sleep(self.idle_timeout) => {
                 counter!("kaze_read_timeout_total").increment(1);
                 None
             }
-        };
-        if pkg.is_none() {
-            return Err(ConnectionClosed.into());
-        }
-        Ok(pkg)
+        })
     }
 
     async fn transfer_pkg(&self, data: &mut BytesMut) -> Result<()> {
@@ -318,14 +309,3 @@ impl Register {
         Ok(())
     }
 }
-
-#[derive(Debug)]
-struct ConnectionClosed;
-
-impl Display for ConnectionClosed {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Connection closed")
-    }
-}
-
-impl std::error::Error for ConnectionClosed {}

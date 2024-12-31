@@ -632,12 +632,14 @@ static int kz_open_raw(kz_State *S, const char *filename) {
 }
 
 KZ_API void kz_shutdown(kz_State *S) {
+    if (S == NULL) return;
     __atomic_store_n(&S->hdr->closed, 1, __ATOMIC_RELAXED);
     kz_futex_wake(&S->hdr->used, 1);
     kz_futex_wake(&S->hdr->need, 1);
 }
 
 KZ_API void kz_delete(kz_State *S) {
+    if (S == NULL) return;
     if (!__atomic_load_n(&S->hdr->closed, __ATOMIC_ACQUIRE)) kz_shutdown(S);
     munmap(S->hdr, S->shmsize);
     close(S->shm_fd);

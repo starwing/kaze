@@ -1,3 +1,4 @@
+// mod args;
 mod codec;
 mod config;
 mod dispatcher;
@@ -10,26 +11,32 @@ mod kaze {
 
 use std::net::Ipv4Addr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use config::parse_args;
 use kaze_core::KazeState;
 use metrics::counter;
 use ratelimit::RateLimit;
 use tokio::select;
 use tokio::{net::TcpListener, task::block_in_place, try_join};
 use tracing::level_filters::LevelFilter;
-use tracing::{error, info, instrument, span, trace, warn, Level};
+use tracing::{error, info, span, trace, warn, Level};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-use crate::config::LogFileInfo;
+use crate::config::LogFileConfig;
 use crate::dispatcher::Dispatcher;
 use crate::register::Register;
 use crate::resolver::Resolver;
 
+#[allow(unreachable_code)]
+#[allow(unused_variables)]
 #[tokio::main]
 async fn main() -> Result<()> {
-    let app = config::parse_args().context("Failed to parse config")?;
-    let (non_block, _guard) = LogFileInfo::build_writer(app.log.as_ref())?;
+    let app = parse_args().context("Failed to parse config")?;
+
+    let (non_block, _guard) =
+        LogFileConfig::build_writer(&app, app.log.as_ref())?;
 
     if let Some(rate_limit) = &app.rate_limit {
         counter!("kaze_rate_limit_total")
@@ -40,7 +47,9 @@ async fn main() -> Result<()> {
     // install tracing with configuration
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
-        .with(non_block.map(|non_block| fmt::layer().with_writer(non_block)))
+        .with(non_block.map(|non_block| {
+            fmt::layer().with_ansi(false).with_writer(non_block)
+        }))
         .with(
             EnvFilter::builder()
                 .with_default_directive(LevelFilter::INFO.into())
@@ -53,18 +62,19 @@ async fn main() -> Result<()> {
     info!(config = ?app);
 
     // install prometheus metrics
-    if app.prometheus.is_some() || app.prometheus_push.is_some() {
+    if let Some(conf) = &app.prometheus {
         let mut recorder =
             metrics_exporter_prometheus::PrometheusBuilder::new();
-        if let Some(addr) = app.prometheus {
+        if let Some(addr) = conf.listen {
             recorder = recorder.with_http_listener(addr);
         }
-        if let Some(push) = app.prometheus_push {
+        if let Some(endpoint) = &conf.endpoint {
+            let default_interval = Duration::from_secs(10);
             recorder = recorder.with_push_gateway(
-                push.endpoint,
-                push.interval,
-                push.username,
-                push.password,
+                endpoint,
+                conf.interval.unwrap_or(default_interval.into()).into(),
+                conf.username.clone(),
+                conf.password.clone(),
             )?;
         }
         recorder
@@ -78,19 +88,24 @@ async fn main() -> Result<()> {
 
     // create shm
     let (sq, cq) = new_kaze_pair(
-        &app.shmfile,
-        &app.ident,
-        app.sq_bufsize,
-        app.cq_bufsize,
-        app.unlink,
+        &app.kaze.name,
+        app.kaze.ident.to_bits(),
+        app.kaze.sq_bufsize,
+        app.kaze.cq_bufsize,
+        true, // app.unlink,
     )
     .context("Failed to create kaze shm queue")?;
     info!("submission queue created name={}", sq.name());
     info!("completion queue created name={}", sq.name());
 
-    let resolver = Resolver::new(app.resolver_cache, app.resolver_livetime);
-    for node in app.nodes {
-        resolver.add_node(node.ident.to_bits(), node.addr).await;
+    let mut resolver =
+        Resolver::new(app.resolver.cache_size, app.resolver.live_time);
+    resolver.setup_local(app.nodes.iter()).await;
+    if let Some(conf) = &app.consul {
+        resolver
+            .setup_consul(conf.addr.clone(), conf.consul_token.clone())
+            .await
+            .context("Failed to setup consul client")?;
     }
 
     if app.host_cmd.len() > 0 {
@@ -104,9 +119,10 @@ async fn main() -> Result<()> {
     let reg = Arc::new(Register::new(
         sq,
         rate_limit,
-        app.pending_timeout,
-        app.idle_timeout,
+        app.register.pending_timeout,
+        app.register.idle_timeout,
     ));
+    let sq_shutdown = sq_shutdown; // change Drop order before reg
     let dispatcher = Dispatcher::new();
 
     // start listening at last
@@ -135,21 +151,23 @@ async fn main() -> Result<()> {
     )
     .context("Failed to in main loop")?;
 
-    info!("begin graceful exiting ...");
-    reg.graceful_exit().await?;
-    info!("graceful exited");
-
-    // notify host process to exit.
-    // must be called before exit, because `sq` has moved into `reg`, and it
-    // drops **before** sq_shutdown, makes a crash.
+    // shutdown submission queue, do not allow new requests
     drop(sq_shutdown);
     info!("submission queue closed");
-    unlink_kaze_pair(&app.shmfile, &app.ident)?;
-    info!("kaze shared memory files unlinked");
+
+    info!("graceful exiting start ...");
+    reg.graceful_exit().await?;
+    info!("register graceful exited");
+
+    unlink_kaze_pair(&app.kaze.name, app.kaze.ident.to_bits())?;
+    info!("graceful exiting completed");
     Ok(())
 }
 
-#[instrument(level = "trace", skip(listener, exit_notify, reg, resolver))]
+#[tracing::instrument(
+    level = "trace",
+    skip(listener, exit_notify, reg, resolver)
+)]
 async fn handle_listener(
     listener: &TcpListener,
     exit_notify: &Arc<tokio::sync::Notify>,
@@ -169,7 +187,7 @@ async fn handle_listener(
     }
 }
 
-#[instrument(level = "trace", skip(cq, dispatcher, reg, resolver))]
+#[tracing::instrument(level = "trace", skip(cq, dispatcher, reg, resolver))]
 async fn handle_completion_queue(
     mut cq: KazeState,
     dispatcher: &Dispatcher,
@@ -218,13 +236,12 @@ async fn handle_completion_queue(
 
 fn new_kaze_pair(
     prefix: impl AsRef<str>,
-    ident: &Ipv4Addr,
+    ident: u32,
     sq_bufsize: usize,
     cq_bufsize: usize,
     unlink: bool,
 ) -> Result<(KazeState, KazeState)> {
     let (sq_name, cq_name) = get_kaze_pair_names(prefix, ident);
-    let ident = ident.to_bits();
 
     if KazeState::exists(&sq_name).context("Failed to check shm queue")? {
         if !unlink {
@@ -259,10 +276,12 @@ fn new_kaze_pair(
     Ok((sq, cq))
 }
 
-fn unlink_kaze_pair(prefix: impl AsRef<str>, ident: &Ipv4Addr) -> Result<()> {
+fn unlink_kaze_pair(prefix: impl AsRef<str>, ident: u32) -> Result<()> {
     let (sq_name, cq_name) = get_kaze_pair_names(prefix, ident);
+    info!("unlink submission queue: {}", sq_name);
     KazeState::unlink(&sq_name)
         .context("Failed to unlink submission queue")?;
+    info!("unlink completion queue: {}", cq_name);
     KazeState::unlink(&cq_name)
         .context("Failed to unlink completion queue")?;
     Ok(())
@@ -270,9 +289,10 @@ fn unlink_kaze_pair(prefix: impl AsRef<str>, ident: &Ipv4Addr) -> Result<()> {
 
 fn get_kaze_pair_names(
     prefix: impl AsRef<str>,
-    ident: &Ipv4Addr,
+    ident: u32,
 ) -> (String, String) {
-    let sq_name = format!("{}_sq_{}", prefix.as_ref(), ident);
-    let cq_name = format!("{}_cq_{}", prefix.as_ref(), ident);
+    let addr = Ipv4Addr::from_bits(ident);
+    let sq_name = format!("{}_sq_{}", prefix.as_ref(), addr);
+    let cq_name = format!("{}_cq_{}", prefix.as_ref(), addr);
     (sq_name, cq_name)
 }

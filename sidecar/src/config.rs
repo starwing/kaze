@@ -1,49 +1,48 @@
 use std::{
     net::{Ipv4Addr, SocketAddr},
     path::PathBuf,
-    str::FromStr,
     sync::LazyLock,
     time::Duration,
 };
 
 use anyhow::{bail, Context, Result};
-use clap::{crate_version, Parser};
-use clap_serde_derive::ClapSerde;
-use serde::Deserialize;
+use clap::{crate_version, CommandFactory, FromArgMatches, Parser};
+use clap_merge::ClapMerge;
+use duration_string::DurationString;
+use serde::{Deserialize, Serialize};
 use tracing::info;
 use tracing_appender::{
     non_blocking::{NonBlocking, WorkerGuard},
     rolling::Rotation,
 };
 
-type OptArgs = <Args as ClapSerde>::Opt;
+pub fn parse_args() -> Result<Config> {
+    let args = Config::command().get_matches();
 
-/// parse command line arguments
-pub fn parse_args() -> Result<Args> {
-    let mut args = Args::default();
-    let opt_args = OptArgs::parse();
-
-    let default_config_file = PathBuf::from_str("sidecar.toml").unwrap();
-    let config_file = opt_args
-        .config
-        .as_ref()
-        .or(Some(&default_config_file))
-        .filter(|p| p.exists());
-
-    if let Some(config) = config_file {
-        info!("use config file {}", config.display());
-        let file_args: OptArgs = toml::from_str(
-            &std::fs::read_to_string(config)
+    let args = if let Some(cfg_path) =
+        args.get_one::<PathBuf>("config").filter(|p| p.exists())
+    {
+        info!("use config file {}", cfg_path.display());
+        let mut config: Config = toml::from_str(
+            &std::fs::read_to_string(&cfg_path)
                 .context("Failed to read config file")?,
         )
         .context("Failed to parse config file")?;
-        args = args.merge(file_args);
-    }
+        config.merge(&args);
+        config
+    } else {
+        Config::from_arg_matches(&args).context("Failed to parse config")?
+    };
 
-    args = args.merge(opt_args);
-
-    args.validate().context("Failed to validate config")?;
+    validate_args(&args)?;
     Ok(args)
+}
+
+fn validate_args(args: &Config) -> Result<()> {
+    if args.kaze.ident == Ipv4Addr::UNSPECIFIED {
+        bail!("ident must be specified");
+    }
+    Ok(())
 }
 
 static VERSION: LazyLock<String> = LazyLock::new(|| {
@@ -56,142 +55,221 @@ static VERSION: LazyLock<String> = LazyLock::new(|| {
     }
 });
 
-#[derive(ClapSerde, Parser, Deserialize, Debug)]
+/// the kaze sidecar for host
+#[derive(ClapMerge, Parser, Serialize, Deserialize, Clone, Debug)]
 #[command(version = VERSION.as_str(), about)]
-pub struct Args {
+pub struct Config {
     /// Name of config file (default: sidecar.toml)
-    #[arg(short = 'f', long = "config")]
-    #[default(PathBuf::new())]
+    #[arg(short, long, default_value = "sidecar.toml")]
+    #[arg(value_name = "PATH")]
+    #[serde(skip)]
     pub config: PathBuf,
 
     /// Unlink shared memory object if it exists
-    #[arg(short = 'u', long = "unlink", action = clap::ArgAction::SetTrue)]
+    #[arg(short, long, action = clap::ArgAction::SetTrue)]
+    #[serde(skip)]
     pub unlink: bool,
 
-    /// Name of the shared memory object
-    #[arg(short = 'n', long = "name")]
-    pub shmfile: String,
-
-    /// Identifier for the shared memory object
-    #[arg(short, long)]
-    #[default(Ipv4Addr::new(0, 0, 0, 0))]
-    pub ident: Ipv4Addr,
+    /// host command line to run after sidecar started
+    #[arg(trailing_var_arg = true)]
+    #[serde(skip)]
+    pub host_cmd: Vec<String>,
 
     /// listen address for the mesh endpoint
-    #[arg(short, long)]
-    #[default(":6081".to_owned())]
+    #[serde(default = "default_listen")]
+    #[arg(short, long, default_value_t = default_listen())]
+    #[arg(value_name = "ADDR")]
     pub listen: String,
-
-    /// location of consul server
-    #[arg(short = 'r', long = "resolve")]
-    #[default("".to_owned())]
-    // not support for uri now
-    // #[serde(with = "http_serde::uri")]
-    // pub consul: http::uri::Uri,
-    pub consul: String,
-
-    /// Size of the request (sidecar to host) buffer for shared memory
-    #[arg(short = 's', long = "sq")]
-    #[default(get_page_size())]
-    pub sq_bufsize: usize,
-
-    /// Size of the response (host to sidecar) buffer for shared memory
-    #[arg(short = 'c', long = "cq")]
-    #[default(get_page_size())]
-    pub cq_bufsize: usize,
 
     /// Count of worker threads (0 means autodetect)
     #[arg(short = 'j', long)]
-    #[default(0)]
-    pub threads: usize,
+    #[arg(value_name = "N")]
+    pub threads: Option<usize>,
 
-    /// Size of resolver mask cache
-    #[arg(long)]
-    #[default(10000)]
-    pub resolver_cache: usize,
+    /// Name of the shared memory object
+    #[command(flatten)]
+    pub kaze: KazeConfig,
 
-    /// live time (as second) of resolver mask cache
-    #[arg(long)]
-    #[default(1)]
-    pub resolver_livetime: u64,
+    /// log file path
+    #[command(flatten)]
+    pub log: Option<LogFileConfig>,
 
-    /// timeout (as millisecond) for pending connection
-    #[arg(long)]
-    #[default(500)]
-    pub pending_timeout: u64,
+    /// register config
+    #[command(flatten)]
+    pub register: RegisterConfig,
 
-    /// timeout (as millisecond) for idle connection
-    #[arg(long)]
-    #[default(60_000)]
-    pub idle_timeout: u64,
+    /// rate limit for incomming packets
+    #[command(flatten)]
+    pub rate_limit: Option<RateLimitConfig>,
 
-    /// prometheus endpoint
-    #[arg(short = 'p', long = "prometheus")]
-    pub prometheus: Option<SocketAddr>,
+    /// resolver config
+    #[command(flatten)]
+    pub resolver: ResolverConfig,
+
+    /// location of consul server
+    #[command(flatten)]
+    pub consul: Option<ConsulConfig>,
 
     /// prometheus push gateway
-    #[arg(skip)]
-    pub prometheus_push: Option<PrometheusPush>,
+    #[command(flatten)]
+    pub prometheus: Option<PromethusConfig>,
 
     /// local ident mapping
     #[arg(skip)]
-    pub nodes: Vec<Node>,
-
-    /// log file path
-    #[arg(skip)]
-    pub log: Option<LogFileInfo>,
-
-    #[arg(skip)]
-    pub rate_limit: Option<RateLimitInfo>,
-
-    /// host command line to run after sidecar started
-    #[arg(last = false)]
-    #[default(vec![])]
-    pub host_cmd: Vec<String>,
+    pub nodes: Vec<NodeConfig>,
 }
 
-impl Args {
-    pub fn validate(&self) -> Result<()> {
-        if self.ident.to_bits() == 0 {
-            bail!("ident required");
-        }
-        if self.shmfile.is_empty() {
-            bail!("shmfile required");
-        }
-        Ok(())
-    }
+fn default_listen() -> String {
+    "0.0.0.0:6081".to_string()
 }
 
-/// local ident -> node address mapping
-#[derive(Deserialize, Clone, Debug)]
-pub struct Node {
+#[derive(ClapMerge, Parser, Serialize, Deserialize, Clone, Debug)]
+#[command(next_help_heading = "Shm queue configurations")]
+pub struct KazeConfig {
+    /// Name of the shared memory object
+    #[serde(default = "default_name")]
+    #[arg(short, long, default_value_t = default_name())]
+    pub name: String,
+
+    /// Identifier for the shared memory object
+    #[arg(short, long, default_value_t = Ipv4Addr::UNSPECIFIED)]
     pub ident: Ipv4Addr,
-    pub addr: SocketAddr,
+
+    /// Size of the request (sidecar to host) buffer for shared memory
+    #[serde(default = "default_sq_bufsize")]
+    #[arg(long, default_value_t = default_sq_bufsize())]
+    #[arg(value_name = "BYTES")]
+    pub sq_bufsize: usize,
+
+    /// Size of the response (host to sidecar) buffer for shared memory
+    #[serde(default = "default_cq_bufsize")]
+    #[arg(long, default_value_t = default_cq_bufsize())]
+    #[arg(value_name = "BYTES")]
+    pub cq_bufsize: usize,
 }
 
-/// prometheus push gateway configuration
-#[derive(Deserialize, Clone, Debug)]
-pub struct PrometheusPush {
-    pub endpoint: String,
-    pub interval: Duration,
-    pub username: Option<String>,
-    pub password: Option<String>,
+fn default_name() -> String {
+    "kaze".to_string()
+}
+
+fn default_sq_bufsize() -> usize {
+    page_size::get() * 8
+}
+
+fn default_cq_bufsize() -> usize {
+    page_size::get() * 8
 }
 
 /// log file configuration
-#[derive(Deserialize, Clone, Debug)]
-pub struct LogFileInfo {
+#[derive(ClapMerge, Parser, Serialize, Deserialize, Clone, Debug)]
+#[command(next_help_heading = "Log file configurations")]
+pub struct LogFileConfig {
+    /// log file directory
+    #[serde(default = "default_log_dir")]
+    #[arg(long = "log-dir", default_value = default_log_dir().into_os_string())]
+    #[arg(value_name = "PATH")]
     pub directory: PathBuf,
+
+    /// log file prefix
+    #[arg(long = "log", default_value = "{name}_{ident}")]
     pub prefix: String,
-    pub suffix: Option<String>,
-    pub max_count: usize,
-    #[serde(deserialize_with = "parse_rotation")]
+
+    /// log file rotation
+    #[serde(default = "default_rotation")]
+    #[serde(with = "serde_rotation")]
+    #[arg(long = "log-rotation", value_parser = parse_rotation, default_value = "never")]
     pub rotation: Rotation,
+
+    /// log file suffix
+    #[arg(long = "log-suffix", default_value = default_suffix().unwrap())]
+    #[serde(default = "default_suffix")]
+    pub suffix: Option<String>,
+
+    /// log file minimum level
+    #[arg(long = "log-level")]
+    #[arg(value_name = "LEVEL", default_missing_value = "trace")]
+    pub level: Option<String>,
+
+    /// max log file count
+    #[arg(long = "log-max-count")]
+    #[arg(value_name = "N")]
+    pub max_count: Option<usize>,
 }
 
-impl LogFileInfo {
+fn default_log_dir() -> PathBuf {
+    PathBuf::from("logs")
+}
+
+fn default_suffix() -> Option<String> {
+    Some(".log".to_string())
+}
+
+fn default_rotation() -> Rotation {
+    Rotation::NEVER
+}
+
+fn parse_rotation(s: &str) -> Result<Rotation> {
+    Ok(match s.to_ascii_lowercase().as_str() {
+        "daily" => Rotation::DAILY,
+        "hourly" => Rotation::HOURLY,
+        "minutely" => Rotation::MINUTELY,
+        "never" => Rotation::NEVER,
+        _ => bail!("invalid rotation {}", s),
+    })
+}
+
+mod serde_rotation {
+    use serde::{de::Visitor, Deserializer, Serializer};
+    use tracing_appender::rolling::Rotation;
+
+    pub fn serialize<S>(
+        rotation: &Rotation,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let str = match rotation {
+            &Rotation::DAILY => "daily",
+            &Rotation::HOURLY => "hourly",
+            &Rotation::MINUTELY => "minutely",
+            &Rotation::NEVER => "never",
+        };
+        serializer.serialize_str(str)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Rotation, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_str(RotationVisitor)
+    }
+
+    struct RotationVisitor;
+
+    impl<'de> Visitor<'de> for RotationVisitor {
+        type Value = Rotation;
+
+        fn expecting(
+            &self,
+            formatter: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            formatter.write_str("daily | hourly | minutely | never")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Rotation, E>
+        where
+            E: serde::de::Error,
+        {
+            super::parse_rotation(value).map_err(serde::de::Error::custom)
+        }
+    }
+}
+
+impl LogFileConfig {
     /// build non-blocking writer from configuration
     pub fn build_writer(
+        root: &Config,
         conf: Option<&Self>,
     ) -> Result<(Option<NonBlocking>, Option<WorkerGuard>)> {
         Ok(conf
@@ -200,10 +278,15 @@ impl LogFileInfo {
                 if let Some(suffix) = &conf.suffix {
                     builder = builder.filename_suffix(suffix);
                 }
+                if let Some(size) = conf.max_count {
+                    builder = builder.max_log_files(size);
+                }
                 Some(
                     builder
-                        .filename_prefix(conf.prefix.clone())
-                        .max_log_files(conf.max_count)
+                        .filename_prefix(Self::format_log_name(
+                            root,
+                            &conf.prefix,
+                        ))
                         .rotation(conf.rotation.clone())
                         .build(conf.directory.as_path())
                         .context("Failed to build appender"),
@@ -214,56 +297,74 @@ impl LogFileInfo {
             .map(|(non_block, guard)| (Some(non_block), Some(guard)))
             .unwrap_or((None, None)))
     }
-}
 
-pub fn parse_rotation<'de, D>(deserializer: D) -> Result<Rotation, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    struct Visitor;
-    impl<'de> serde::de::Visitor<'de> for Visitor {
-        type Value = Rotation;
-
-        fn expecting(
-            &self,
-            formatter: &mut std::fmt::Formatter,
-        ) -> std::fmt::Result {
-            formatter.write_str("daily | hourly | minutely | never")
-        }
-
-        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            match v.to_lowercase().as_str() {
-                "daily" => Ok(Rotation::DAILY),
-                "hourly" => Ok(Rotation::HOURLY),
-                "minutely" => Ok(Rotation::MINUTELY),
-                "never" => Ok(Rotation::NEVER),
-                _ => Err(serde::de::Error::custom(format!(
-                    "Invalid rotation: {}",
-                    v
-                ))),
-            }
-        }
+    fn format_log_name(root: &Config, prefix: &str) -> String {
+        prefix
+            .replace("{name}", root.kaze.name.as_str())
+            .replace("{ident}", &root.kaze.ident.to_string())
+            .replace("{version}", VERSION.as_str())
     }
-
-    deserializer.deserialize_str(Visitor)
 }
 
-#[derive(Deserialize, Clone, Debug)]
-pub struct RateLimitInfo {
-    pub max: usize,
+#[derive(ClapMerge, Parser, Serialize, Deserialize, Clone, Debug)]
+#[command(next_help_heading = "Incomming socket configurations")]
+pub struct RegisterConfig {
+    /// close timeout for pending connection
+    #[serde(default = "default_pending_timeout")]
+    #[arg(long, value_parser = parse_duration, default_value_t = default_pending_timeout())]
+    #[arg(value_name = "DURATION")]
+    pub pending_timeout: DurationString,
+
+    /// close timeout for idle connection
+    #[serde(default = "default_idle_timeout")]
+    #[arg(long, value_parser = parse_duration, default_value_t = default_idle_timeout())]
+    #[arg(value_name = "DURATION")]
+    pub idle_timeout: DurationString,
+}
+
+fn parse_duration(s: &str) -> Result<DurationString, String> {
+    s.parse::<DurationString>().map_err(|e| e.to_string())
+}
+
+fn default_pending_timeout() -> DurationString {
+    Duration::from_millis(500).into()
+}
+
+fn default_idle_timeout() -> DurationString {
+    Duration::from_millis(60_000).into()
+}
+
+#[derive(ClapMerge, Parser, Serialize, Deserialize, Clone, Debug)]
+#[command(next_help_heading = "Rate limit configurations")]
+pub struct RateLimitConfig {
+    /// max requests per duration
+    #[arg(long = "total-max", value_name = "N")]
+    pub max: Option<usize>,
+
+    /// initial requests when initialized
+    #[arg(long = "total-initial", value_name = "N", default_value_t = 0)]
     pub initial: usize,
+
+    /// refill requests count per duration
+    #[arg(long = "total-refill", value_name = "N", default_value_t = 0)]
     pub refill: usize,
 
+    /// refill interval
     #[serde(default = "default_interval")]
-    pub interval: Duration,
+    #[arg(id = "rate_limit_interval", long = "total-interval")]
+    #[arg(value_parser = parse_duration, default_value_t = default_interval())]
+    #[arg(value_name = "DURATION")]
+    pub interval: DurationString,
 
+    #[arg(skip)]
     pub per_msg: Vec<PerMsgLimitInfo>,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+fn default_interval() -> DurationString {
+    Duration::from_millis(100).into()
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PerMsgLimitInfo {
     pub ident: Option<Ipv4Addr>,
     pub body_type: Option<String>,
@@ -273,13 +374,94 @@ pub struct PerMsgLimitInfo {
     pub refill: usize,
 
     #[serde(default = "default_interval")]
-    pub interval: Duration,
+    pub interval: DurationString,
 }
 
-fn default_interval() -> Duration {
-    Duration::from_secs(1)
+#[derive(ClapMerge, Parser, Serialize, Deserialize, Clone, Debug)]
+#[command(next_help_heading = "Local resolver configurations")]
+pub struct ResolverConfig {
+    /// Size of resolver mask cache
+    #[serde(default = "default_resolver_cache")]
+    #[arg(long, default_value_t = default_resolver_cache())]
+    #[arg(value_name = "BYTES")]
+    pub cache_size: usize,
+
+    /// Live time of entries in resolver mask cache
+    #[serde(default = "default_resolver_livetime")]
+    #[arg(long, value_parser = parse_duration, default_value_t = default_resolver_livetime())]
+    #[arg(value_name = "DURATION")]
+    pub live_time: DurationString,
 }
 
-fn get_page_size() -> usize {
-    page_size::get()
+fn default_resolver_cache() -> usize {
+    114514
+}
+
+fn default_resolver_livetime() -> DurationString {
+    Duration::from_secs(1).into()
+}
+
+#[derive(ClapMerge, Parser, Serialize, Deserialize, Clone, Debug)]
+#[command(next_help_heading = "Consul resolver configurations")]
+pub struct ConsulConfig {
+    #[serde(default = "default_consul_addr")]
+    #[arg(long = "consol", required = false, default_missing_value = default_consul_addr())]
+    pub addr: String,
+
+    /// consul token
+    #[arg(long = "consul-token")]
+    pub consul_token: Option<String>,
+}
+
+fn default_consul_addr() -> String {
+    "127.0.0.1:8500".to_string()
+}
+
+/// prometheus push gateway configuration
+#[derive(ClapMerge, Parser, Serialize, Deserialize, Clone, Debug)]
+#[command(next_help_heading = "Prometheus metrics configurations")]
+pub struct PromethusConfig {
+    /// prometheus metrics endpoint
+    #[arg(
+        id = "metrics",
+        long = "metrics",
+        default_missing_value = default_metrics_listening().to_string()
+    )]
+    #[arg(value_name = "ADDR")]
+    pub listen: Option<SocketAddr>,
+
+    /// prometheus push endpoint
+    #[arg(long = "metrics-push-endpoint")]
+    #[arg(value_name = "ADDR")]
+    pub endpoint: Option<String>,
+
+    /// prometheus push interval
+    #[arg(long = "metrics-push-interval")]
+    #[arg(value_name = "DURATION")]
+    pub interval: Option<DurationString>,
+
+    /// prometheus push username
+    #[arg(long = "metrics-push-username")]
+    pub username: Option<String>,
+
+    /// prometheus push password
+    #[arg(long = "metrics-push-password")]
+    pub password: Option<String>,
+}
+
+fn default_metrics_listening() -> SocketAddr {
+    "127.0.0.1:9090".parse().unwrap()
+}
+
+/// local ident -> node address mapping
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct NodeConfig {
+    pub ident: Ipv4Addr,
+    pub addr: SocketAddr,
+}
+
+#[test]
+fn verify_cli() {
+    use clap::CommandFactory;
+    Config::command().debug_assert();
 }

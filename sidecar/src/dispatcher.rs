@@ -5,7 +5,6 @@ use metrics::counter;
 use rand::seq::SliceRandom;
 use tokio::{io::AsyncWriteExt, net::tcp::OwnedWriteHalf, sync::Mutex};
 use tokio_stream::StreamExt;
-use tracing::instrument;
 
 use crate::{
     kaze::{
@@ -32,7 +31,10 @@ impl Dispatcher {
     }
 
     /// dispatch a packet
-    #[instrument(level = "trace", skip(self, hdr, data, reg, resolver))]
+    #[tracing::instrument(
+        level = "trace",
+        skip(self, hdr, data, reg, resolver)
+    )]
     pub async fn dispatch(
         &self,
         hdr: &kaze::Hdr,
@@ -64,7 +66,10 @@ impl Dispatcher {
         .context("Failed to dispatch packet")
     }
 
-    #[instrument(level = "trace", skip(self, ident, data, reg, resolver))]
+    #[tracing::instrument(
+        level = "trace",
+        skip(self, ident, data, reg, resolver)
+    )]
     async fn dispatch_to(
         &self,
         ident: u32,

@@ -22,6 +22,7 @@ impl Decoder for NetPacketCodec {
     type Item = (kaze::Hdr, BytesMut);
     type Error = anyhow::Error;
 
+    #[tracing::instrument(skip(self, src))]
     fn decode(
         &mut self,
         src: &mut BytesMut,
@@ -99,6 +100,7 @@ impl Decoder for NetPacketForwardCodec {
 ///
 /// layouyt:
 /// [hdr_size(4)][hdr][body]
+#[tracing::instrument(skip(src))]
 pub fn decode_packet<'a>(src: &mut kaze_core::Bytes) -> Result<kaze::Hdr> {
     // A KazeBytes should only be used once, it contains only one packet
     assert!(src.pos() == 0);
@@ -114,8 +116,8 @@ pub fn decode_packet<'a>(src: &mut kaze_core::Bytes) -> Result<kaze::Hdr> {
             src.remaining()
         );
     }
-    let src = src.take(hdr_size);
-    Ok(kaze::Hdr::decode(src).context("Failed to decode Hdr")?)
+    let buf = src.take(hdr_size);
+    Ok(kaze::Hdr::decode(buf).context("Failed to decode Hdr")?)
 }
 
 /// Encode a packet to a KazeBytesMut, KazeBytesMut created from KazeState,

@@ -1,10 +1,43 @@
-shmfile = "kaze_shm"
-ident = "0.0.0.1"
 listen = "0.0.0.0:6081"
-sq_bufsize = 65536
-cq_bufsize = 65536
-pack_bufsize = 65536
 threads = 0
+
+[kaze]
+name = "kaze_shm"
+ident = "0.0.0.1"
+# sq_bufsize = 65536
+# cq_bufsize = 65536
+
+[log]
+directory = "logs"
+prefix = "{name}_{ident}"
+# rotation = "never"
+# suffix = ".log"
+# level = "trace"
+# max_count = 10
+
+[register]
+# pending_timeout = "1s"
+# idle_timeout = "500ms"
+
+#[rate_limit]
+# max = 10000 # not present means unlinked
+# initial = 0 # 0 means use max
+# refill = 0  # 0 means use max
+# interval = "100ms"
+#
+# [[rate_limit.per_msg]]
+# ident = "0.0.0.1"
+# body_type = "login_req"
+# max = 1000
+# initial = 0 # 0 means use max
+# refill = 0  # 0 means use max
+# interval = "100ms"
+
+[resolver]
+# cache_size = "114514"
+# live_time = "1s"
+
+pack_bufsize = 65536
 
 [[nodes]]
 ident = "0.0.0.1"
@@ -17,3 +50,16 @@ addr = "127.0.0.1:6082"
 [[nodes]]
 ident = "0.0.0.3"
 addr = "127.0.0.1:6083"
+
+# [consul]
+# addr = "127.0.0.1:8500"
+# consul_token = "consul_token"
+# consul_prefix = "sidecar"
+# consul_tags = ["kaze"]
+
+# [prometheus]
+# listen = "127.0.0.1:9090"
+# endpoint = "http://127.0.0.1:9091/metrics"
+# interval = "10s"
+# username = "username"
+# password = "password"
