@@ -14,16 +14,9 @@ pub struct kz_State(*mut c_void);
 
 #[repr(C)]
 #[allow(non_camel_case_types)]
-pub struct kz_PushContext {
+pub struct kz_Context {
     refer: *const c_void,
-    head: usize,
-    size: usize,
-}
-
-#[repr(C)]
-#[allow(non_camel_case_types)]
-pub struct kz_PopContext {
-    data: *const c_void,
+    unsplit: usize,
     head: usize,
     size: usize,
 }
@@ -52,51 +45,49 @@ extern "C" {
     pub fn kz_pid(S: *const kz_State) -> i32;
     pub fn kz_owner(S: *const kz_State, sender: *mut i32, receiver: *mut i32);
     pub fn kz_set_owner(S: *const kz_State, sender: i32, receiver: i32);
+    pub fn kz_is_unsplit(S: *const kz_State) -> i32;
+    pub fn kz_set_unsplit(S: *const kz_State, value: i32);
     pub fn kz_used(S: *const kz_State) -> usize;
     pub fn kz_size(S: *const kz_State) -> usize;
 
     pub fn kz_try_push(
         S: *mut kz_State,
-        ctx: *mut kz_PushContext,
+        ctx: *mut kz_Context,
         len: usize,
     ) -> i32;
 
-    pub fn kz_push(
-        S: *mut kz_State,
-        ctx: *mut kz_PushContext,
-        len: usize,
-    ) -> i32;
+    pub fn kz_push(S: *mut kz_State, ctx: *mut kz_Context, len: usize) -> i32;
 
     pub fn kz_push_until(
         S: *mut kz_State,
-        ctx: *mut kz_PushContext,
+        ctx: *mut kz_Context,
         len: usize,
         millis: i32,
     ) -> i32;
 
     pub fn kz_push_buffer(
-        ctx: *mut kz_PushContext,
+        ctx: *mut kz_Context,
         part: i32,
         plen: *mut usize,
     ) -> *mut c_char;
 
-    pub fn kz_push_commit(ctx: *mut kz_PushContext, len: usize) -> i32;
+    pub fn kz_push_commit(ctx: *mut kz_Context, len: usize) -> i32;
 
-    pub fn kz_try_pop(S: *mut kz_State, ctx: *mut kz_PopContext) -> i32;
+    pub fn kz_try_pop(S: *mut kz_State, ctx: *mut kz_Context) -> i32;
 
-    pub fn kz_pop(S: *mut kz_State, ctx: *mut kz_PopContext) -> i32;
+    pub fn kz_pop(S: *mut kz_State, ctx: *mut kz_Context) -> i32;
 
     pub fn kz_pop_until(
         S: *mut kz_State,
-        ctx: *mut kz_PopContext,
+        ctx: *mut kz_Context,
         millis: i32,
     ) -> i32;
 
     pub fn kz_pop_buffer(
-        ctx: *const kz_PopContext,
+        ctx: *const kz_Context,
         part: i32,
         plen: *mut usize,
     ) -> *const c_char;
 
-    pub fn kz_pop_commit(ctx: *mut kz_PopContext);
+    pub fn kz_pop_commit(ctx: *mut kz_Context);
 }

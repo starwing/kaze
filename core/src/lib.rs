@@ -127,6 +127,16 @@ impl KazeState {
         }
     }
 
+    /// check if queue is unsplit
+    pub fn is_unsplit(&self) -> bool {
+        unsafe { ffi::kz_is_unsplit(self.ptr) != 0 }
+    }
+
+    /// set the unsplit flag of queue
+    pub fn set_unsplit(&mut self, value: bool) {
+        unsafe { ffi::kz_set_unsplit(self.ptr, value as i32) }
+    }
+
     /// try to push data, return the push context if succeed
     pub fn try_push(&mut self, len: usize) -> Result<PushContext<'_>> {
         let mut ctx = MaybeUninit::uninit();
@@ -210,7 +220,7 @@ impl KazeState {
 
 /// Push context used to copy data into queue
 pub struct PushContext<'a> {
-    raw: ffi::kz_PushContext,
+    raw: ffi::kz_Context,
     _marker: std::marker::PhantomData<&'a ()>,
 }
 
@@ -246,7 +256,7 @@ impl PushContext<'_> {
 
 /// Pop context used to copy data from queue
 pub struct PopContext<'a> {
-    raw: ffi::kz_PopContext,
+    raw: ffi::kz_Context,
     _marker: std::marker::PhantomData<&'a ()>,
 }
 

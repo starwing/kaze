@@ -22,9 +22,8 @@
 #define KZ_BUSY    (-5) /* no data available or no enough space */
 #define KZ_TIMEOUT (-6) /* operation timed out */
 
-typedef struct kz_State       kz_State;
-typedef struct kz_PushContext kz_PushContext;
-typedef struct kz_PopContext  kz_PopContext;
+typedef struct kz_State   kz_State;
+typedef struct kz_Context kz_Context;
 
 KZ_API size_t kz_aligned_bufsize(size_t required_size, size_t page_size);
 KZ_API int    kz_exists(const char *name);
@@ -48,35 +47,31 @@ KZ_API void kz_set_owner(kz_State *S, int sender, int receiver);
 KZ_API size_t kz_used(const kz_State *S);
 KZ_API size_t kz_size(const kz_State *S);
 
+KZ_API void kz_set_unsplit(kz_State *S, int unsplit);
+KZ_API int  kz_is_unsplit(const kz_State *S);
+
 /* sync push */
 
-KZ_API int kz_try_push(kz_State *S, kz_PushContext *ctx, size_t len);
-KZ_API int kz_push(kz_State *S, kz_PushContext *ctx, size_t len);
-KZ_API int kz_push_until(kz_State *S, kz_PushContext *ctx, size_t len,
-                         int millis);
+KZ_API int kz_try_push(kz_State *S, kz_Context *ctx, size_t len);
+KZ_API int kz_push(kz_State *S, kz_Context *ctx, size_t len);
+KZ_API int kz_push_until(kz_State *S, kz_Context *ctx, size_t len, int millis);
 
-KZ_API char *kz_push_buffer(kz_PushContext *ctx, int part, size_t *plen);
-KZ_API int   kz_push_commit(kz_PushContext *ctx, size_t len);
+KZ_API char *kz_push_buffer(kz_Context *ctx, int part, size_t *plen);
+KZ_API int   kz_push_commit(kz_Context *ctx, size_t len);
 
 /* sync pop */
 
-KZ_API int kz_try_pop(kz_State *S, kz_PopContext *ctx);
-KZ_API int kz_pop(kz_State *S, kz_PopContext *ctx);
-KZ_API int kz_pop_until(kz_State *S, kz_PopContext *ctx, int millis);
+KZ_API int kz_try_pop(kz_State *S, kz_Context *ctx);
+KZ_API int kz_pop(kz_State *S, kz_Context *ctx);
+KZ_API int kz_pop_until(kz_State *S, kz_Context *ctx, int millis);
 
-KZ_API const char *kz_pop_buffer(const kz_PopContext *ctx, int part,
-                                 size_t *plen);
-KZ_API void        kz_pop_commit(kz_PopContext *ctx);
+KZ_API const char *kz_pop_buffer(const kz_Context *ctx, int part, size_t *plen);
+KZ_API void        kz_pop_commit(kz_Context *ctx);
 
-struct kz_PushContext {
+struct kz_Context {
     void  *refer;
-    size_t tail;
-    size_t size;
-};
-
-struct kz_PopContext {
-    void  *refer;
-    size_t head;
+    size_t unsplit;
+    size_t pos;
     size_t size;
 };
 
@@ -95,19 +90,21 @@ struct kz_PopContext {
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define KZ_ALIGN sizeof(uint32_t)
+#define KZ_ALIGN   sizeof(uint32_t)
+#define KZ_UNSPLIT 0xFFFFFFFF
 
 typedef struct kz_StateHdr {
     uint32_t size;         /* Size of the shared memory. 4GB max. */
-    uint32_t used;         /* Used size of the ring buffer. */
+    uint32_t used;         /* Used size of the ring buffer, atomic. */
     uint32_t ident;        /* Sidecar process identifier. */
     uint32_t sender_pid;   /* Sidecar process id. */
     uint32_t receiver_pid; /* Host process id. */
     uint32_t closed;       /* Closing flag. */
+    uint32_t unsplit;      /* Unsplit flag (packet always continous). */
     uint32_t head;         /* Head of the ring buffer. */
     uint32_t tail;         /* Tail of the ring buffer. */
-    uint32_t padding[8]; /* padding used and need to differentiate cacheline */
-    uint32_t need;       /* Need size of the ring buffer. */
+    uint32_t padding[7]; /* padding used and need to differentiate cacheline */
+    uint32_t need;       /* Need size of the ring buffer, atomic. */
 } kz_StateHdr;
 
 struct kz_State {
@@ -385,12 +382,15 @@ int kz_futex_wake(void *addr, int wakeAll) {
 
 /* push */
 
-KZ_API int kz_try_push(kz_State *S, kz_PushContext *ctx, size_t size) {
+KZ_API int kz_try_push(kz_State *S, kz_Context *ctx, size_t size) {
     kz_StateHdr *hdr = S->hdr;
-    size_t       need_size, free_size;
+    size_t       need_size, free_size, unsplit;
 
     /* check if there is enough space */
     need_size = kz_get_aligned_size(size + sizeof(uint32_t), KZ_ALIGN);
+    unsplit = kz_is_unsplit(S);
+    if (unsplit && hdr->size - hdr->tail < need_size)
+        need_size += hdr->size - hdr->tail;
     if (need_size > hdr->size) return KZ_TOOBIG;
 
     free_size = kz_space_size(S);
@@ -401,16 +401,21 @@ KZ_API int kz_try_push(kz_State *S, kz_PushContext *ctx, size_t size) {
     }
 
     ctx->refer = hdr;
-    ctx->tail = hdr->tail;
+    ctx->unsplit = unsplit;
+    ctx->pos = hdr->tail;
     ctx->size = size;
     return KZ_OK;
 }
 
-KZ_API char *kz_push_buffer(kz_PushContext *ctx, int part, size_t *plen) {
+KZ_API char *kz_push_buffer(kz_Context *ctx, int part, size_t *plen) {
     kz_StateHdr *hdr = (kz_StateHdr *)ctx->refer;
 
-    size_t tail = ctx->tail + sizeof(uint32_t);
+    size_t tail = ctx->pos + sizeof(uint32_t);
     size_t remain = hdr->size - tail;
+    if (ctx->unsplit) {
+        tail = sizeof(uint32_t);
+        remain = ctx->size;
+    }
     if (part == 0) {
         int tail_has_space = tail < hdr->size;
         *plen = (tail_has_space && tail + ctx->size > hdr->size) ? remain
@@ -424,20 +429,25 @@ KZ_API char *kz_push_buffer(kz_PushContext *ctx, int part, size_t *plen) {
     return NULL;
 }
 
-KZ_API int kz_push_commit(kz_PushContext *ctx, size_t len) {
+KZ_API int kz_push_commit(kz_Context *ctx, size_t len) {
     kz_StateHdr *hdr = (kz_StateHdr *)ctx->refer;
-    size_t       old_used;
+    size_t       old_used, size = len;
     if (len > ctx->size) return KZ_INVALID;
-    kz_write_u32le(kz_data(hdr) + ctx->tail, len);
-    len = kz_get_aligned_size(len + sizeof(uint32_t), KZ_ALIGN);
-    hdr->tail = (hdr->tail + len) % hdr->size;
+    if (ctx->unsplit && (hdr->size - ctx->pos) < ctx->size) {
+        kz_write_u32le(kz_data(hdr) + ctx->pos, KZ_UNSPLIT);
+        ctx->pos = 0;
+        size += hdr->size - ctx->pos;
+    }
+    kz_write_u32le(kz_data(hdr) + ctx->pos, len);
+    size = kz_get_aligned_size(size + sizeof(uint32_t), KZ_ALIGN);
+    hdr->tail = (hdr->tail + size) % hdr->size;
     assert(kz_is_aligned_to(hdr->tail, KZ_ALIGN));
-    old_used = __atomic_fetch_add(&hdr->used, len, __ATOMIC_RELEASE);
+    old_used = __atomic_fetch_add(&hdr->used, size, __ATOMIC_RELEASE);
     if (old_used == 0) kz_futex_wake(&hdr->used, 0);
     return KZ_OK;
 }
 
-KZ_API int kz_push(kz_State *S, kz_PushContext *ctx, size_t size) {
+KZ_API int kz_push(kz_State *S, kz_Context *ctx, size_t size) {
     size_t need_size = kz_get_aligned_size(size + sizeof(uint32_t), KZ_ALIGN);
     while (!kz_isclosed(S)) {
         int ret = kz_try_push(S, ctx, size);
@@ -447,7 +457,7 @@ KZ_API int kz_push(kz_State *S, kz_PushContext *ctx, size_t size) {
     return KZ_CLOSED;
 }
 
-KZ_API int kz_push_until(kz_State *S, kz_PushContext *ctx, size_t size,
+KZ_API int kz_push_until(kz_State *S, kz_Context *ctx, size_t size,
                          int millis) {
     size_t need_size = kz_get_aligned_size(size + sizeof(uint32_t), KZ_ALIGN);
     while (!kz_isclosed(S)) {
@@ -461,7 +471,7 @@ KZ_API int kz_push_until(kz_State *S, kz_PushContext *ctx, size_t size,
 
 /* pop */
 
-KZ_API int kz_try_pop(kz_State *S, kz_PopContext *ctx) {
+KZ_API int kz_try_pop(kz_State *S, kz_Context *ctx) {
     kz_StateHdr *hdr = S->hdr;
     size_t       used_size;
     char        *start;
@@ -475,31 +485,37 @@ KZ_API int kz_try_pop(kz_State *S, kz_PopContext *ctx) {
     start = kz_data(hdr) + hdr->head;
     assert(start + sizeof(uint32_t) <= kz_data(hdr) + hdr->size);
     ctx->refer = hdr;
+    ctx->unsplit = kz_is_unsplit(S);
     ctx->size = kz_read_u32le(start);
-    ctx->head = hdr->head + sizeof(uint32_t);
+    ctx->pos = hdr->head + sizeof(uint32_t);
     return KZ_OK;
 }
 
-KZ_API const char *kz_pop_buffer(const kz_PopContext *ctx, int part,
+KZ_API const char *kz_pop_buffer(const kz_Context *ctx, int part,
                                  size_t *plen) {
     kz_StateHdr *hdr = (kz_StateHdr *)ctx->refer;
 
-    size_t head = ctx->head;
+    size_t head = ctx->pos;
+    size_t size = ctx->size;
     size_t remain = hdr->size - head;
+    if (size == KZ_UNSPLIT) {
+        head = sizeof(uint32_t);
+        size = kz_read_u32le(kz_data(hdr));
+        remain = size;
+    }
     if (part == 0) {
         int head_has_data = head < hdr->size;
-        *plen = (head_has_data && head + ctx->size > hdr->size) ? remain
-                                                                : ctx->size;
+        *plen = (head_has_data && head + size > hdr->size) ? remain : size;
         return kz_data(hdr) + (head_has_data ? head : 0);
-    } else if (part == 1 && ctx->size > remain) {
-        *plen = ctx->size - remain;
+    } else if (part == 1 && size > remain) {
+        *plen = size - remain;
         return kz_data(hdr);
     }
     *plen = 0;
     return NULL;
 }
 
-KZ_API void kz_pop_commit(kz_PopContext *ctx) {
+KZ_API void kz_pop_commit(kz_Context *ctx) {
     kz_StateHdr *hdr = (kz_StateHdr *)ctx->refer;
 
     size_t commit_size = kz_get_aligned_size(sizeof(uint32_t) + ctx->size,
@@ -515,7 +531,7 @@ KZ_API void kz_pop_commit(kz_PopContext *ctx) {
     if ((int32_t)new_need <= 0) kz_futex_wake(&hdr->need, 1);
 }
 
-KZ_API int kz_pop(kz_State *S, kz_PopContext *ctx) {
+KZ_API int kz_pop(kz_State *S, kz_Context *ctx) {
     while (!kz_isclosed(S)) {
         int ret = kz_try_pop(S, ctx);
         if (ret != KZ_BUSY) return ret;
@@ -524,7 +540,7 @@ KZ_API int kz_pop(kz_State *S, kz_PopContext *ctx) {
     return KZ_CLOSED;
 }
 
-KZ_API int kz_pop_until(kz_State *S, kz_PopContext *ctx, int millis) {
+KZ_API int kz_pop_until(kz_State *S, kz_Context *ctx, int millis) {
     while (!kz_isclosed(S)) {
         int ret = kz_try_pop(S, ctx);
         if (ret != KZ_BUSY) return ret;
@@ -539,6 +555,14 @@ KZ_API const char *kz_name(const kz_State *S) { return S->name; }
 KZ_API size_t      kz_size(const kz_State *S) { return S->hdr->size; }
 KZ_API uint32_t    kz_ident(const kz_State *S) { return S->hdr->ident; }
 KZ_API int         kz_pid(const kz_State *S) { return S->self_pid; }
+
+KZ_API void kz_set_unsplit(kz_State *S, int unsplit) {
+    __atomic_store_n(&S->hdr->unsplit, unsplit, __ATOMIC_RELEASE);
+}
+
+KZ_API int kz_is_unsplit(const kz_State *S) {
+    return __atomic_load_n(&S->hdr->unsplit, __ATOMIC_ACQUIRE);
+}
 
 KZ_API size_t kz_used(const kz_State *S) {
     kz_StateHdr *hdr = S->hdr;
@@ -566,6 +590,12 @@ static void kz_init_fail(int shm_fd) {
 static int kz_init(kz_State *S, const char *filename, uint32_t ident,
                    size_t bufsize) {
     struct stat statbuf;
+
+    /* check the size of the ring buffer */
+    if (bufsize >= KZ_UNSPLIT) {
+        errno = EINVAL;
+        return KZ_FAIL;
+    }
 
     /* create a new shared memory object */
     S->shm_fd = shm_open(filename, O_CREAT | O_EXCL | O_RDWR, 0666);
