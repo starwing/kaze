@@ -152,11 +152,11 @@ fn default_name() -> String {
     "kaze".to_string()
 }
 
-fn default_sq_bufsize() -> usize {
+pub fn default_sq_bufsize() -> usize {
     page_size::get() * 8
 }
 
-fn default_cq_bufsize() -> usize {
+pub fn default_cq_bufsize() -> usize {
     page_size::get() * 8
 }
 

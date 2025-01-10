@@ -1,12 +1,13 @@
-use std::{io::IoSlice, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use metrics::counter;
 use rand::seq::SliceRandom;
-use tokio::{io::AsyncWriteExt, net::tcp::OwnedWriteHalf, sync::Mutex};
 use tokio_stream::StreamExt;
 
 use crate::{
+    corral::Corral,
+    edge,
     kaze::{
         self,
         hdr::{
@@ -14,7 +15,6 @@ use crate::{
             RouteType::{DstBroadcast, DstIdent, DstMulticast, DstRandom},
         },
     },
-    register::Register,
     resolver::{self, Resolver},
 };
 
@@ -33,14 +33,15 @@ impl Dispatcher {
     /// dispatch a packet
     #[tracing::instrument(
         level = "trace",
-        skip(self, hdr, data, reg, resolver)
+        skip(self, hdr, data, corral, resolver, sender)
     )]
     pub async fn dispatch(
         &self,
         hdr: &kaze::Hdr,
         data: &kaze_core::Bytes<'_>,
-        reg: &Arc<Register>,
+        corral: &Arc<Corral>,
         resolver: &Resolver,
+        sender: &edge::Sender,
     ) -> Result<()> {
         if hdr.route_type.is_none() {
             counter!("kaze_dispatch_errors_total", "bodyType" => hdr.body_type.clone())
@@ -49,17 +50,22 @@ impl Dispatcher {
         }
         match hdr.route_type.as_ref().unwrap() {
             DstIdent(ident) => {
-                self.dispatch_to(*ident, data, reg, resolver).await
+                self.dispatch_to(*ident, data, corral, resolver, sender)
+                    .await
             }
             DstRandom(mask) => {
-                self.dispatch_to_random(*mask, data, reg, resolver).await
+                self.dispatch_to_random(*mask, data, corral, resolver, sender)
+                    .await
             }
             DstBroadcast(mask) => {
-                self.dispatch_to_broadcast(*mask, data, reg, resolver).await
+                self.dispatch_to_broadcast(
+                    *mask, data, corral, resolver, sender,
+                )
+                .await
             }
             DstMulticast(multicast) => {
                 let idents = multicast.dst_idents.iter().cloned();
-                self.dispatch_to_multicast(idents, &data, reg, resolver)
+                self.dispatch_to_multicast(idents, &data, corral, resolver, sender)
                     .await
             }
         }
@@ -68,23 +74,24 @@ impl Dispatcher {
 
     #[tracing::instrument(
         level = "trace",
-        skip(self, ident, data, reg, resolver)
+        skip(self, ident, data, reg, resolver, sender)
     )]
     async fn dispatch_to(
         &self,
         ident: u32,
         data: &kaze_core::Bytes<'_>,
-        reg: &Arc<Register>,
+        reg: &Arc<Corral>,
         resolver: &resolver::Resolver,
+        sender: &edge::Sender,
     ) -> Result<()> {
         // 1. find a node
-        let sock_write = reg
-            .find_socket(ident, resolver)
+        let conn = reg
+            .find_or_create(ident, resolver, sender)
             .await
             .context("Failed to find socket")?;
 
         // 2. transfer the packet
-        Self::dispatch_to_socket(data, sock_write)
+        conn.dispatch(data)
             .await
             .context("Failed to dispatch packet")
     }
@@ -93,11 +100,12 @@ impl Dispatcher {
         &self,
         idents: impl Iterator<Item = u32>,
         data: &kaze_core::Bytes<'_>,
-        reg: &Arc<Register>,
+        reg: &Arc<Corral>,
         resolver: &resolver::Resolver,
+        sender: &edge::Sender,
     ) -> Result<()> {
         let mut stream = idents
-            .map(|ident| self.dispatch_to(ident, &data, reg, resolver))
+            .map(|ident| self.dispatch_to(ident, &data, reg, resolver, sender))
             .collect::<futures::stream::FuturesUnordered<_>>();
         while let Some(e) = stream.next().await {
             e.context("Failed to dispatch packet in multicast")?;
@@ -109,12 +117,13 @@ impl Dispatcher {
         &self,
         mask: DstMask,
         data: &kaze_core::Bytes<'_>,
-        reg: &Arc<Register>,
+        reg: &Arc<Corral>,
         resolver: &resolver::Resolver,
+        sender: &edge::Sender,
     ) -> Result<()> {
         let idents = resolver.get_mask_nodes(mask.ident, mask.mask).await;
         if let Some((ident, _)) = idents.choose(&mut rand::thread_rng()) {
-            self.dispatch_to(*ident, data, reg, resolver)
+            self.dispatch_to(*ident, data, reg, resolver, sender)
                 .await
                 .context("Failed to dispatch packet in random")?
         }
@@ -125,36 +134,17 @@ impl Dispatcher {
         &self,
         mask: DstMask,
         data: &kaze_core::Bytes<'_>,
-        reg: &Arc<Register>,
+        reg: &Arc<Corral>,
         resolver: &resolver::Resolver,
+        sender: &edge::Sender,
     ) -> Result<()> {
         // 1. find a node
         let nodes = resolver.get_mask_nodes(mask.ident, mask.mask).await;
         let idents = nodes.iter().map(|(ident, _)| *ident);
 
         // 2. transfer the packet
-        self.dispatch_to_multicast(idents, data, reg, resolver)
+        self.dispatch_to_multicast(idents, data, reg, resolver, sender)
             .await
             .context("Failed to dispatch packet in multicast")
-    }
-
-    async fn dispatch_to_socket(
-        data: &kaze_core::Bytes<'_>,
-        socket: Arc<Mutex<OwnedWriteHalf>>,
-    ) -> Result<()> {
-        let size_buf = (data.len() as u32).to_le_bytes();
-        let (s1, s2) = data.as_slice();
-        let written = socket
-            .lock()
-            .await
-            .write_vectored(&[
-                IoSlice::new(&size_buf),
-                IoSlice::new(s1),
-                IoSlice::new(s2),
-            ])
-            .await
-            .context("Failed to write to socket")?;
-        counter!("kaze_write_packets_total").increment(written as u64);
-        Ok(())
     }
 }

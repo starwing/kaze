@@ -262,6 +262,12 @@ pub struct PopContext<'a> {
 
 unsafe impl Send for PopContext<'_> {}
 
+impl std::fmt::Debug for PopContext<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PopContext").finish()
+    }
+}
+
 impl PopContext<'_> {
     /// Returns a reference to the read buffer.
     #[inline]
