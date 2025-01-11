@@ -79,8 +79,8 @@ impl KazeState {
         Ok(Self { ptr })
     }
 
-    pub fn shutdown_guard(&self) -> ShutdownGuard {
-        ShutdownGuard(self.ptr)
+    pub fn lock(&self) -> Guard {
+        Guard(self.ptr)
     }
 
     /// Queue name
@@ -295,12 +295,13 @@ impl PopContext<'_> {
     }
 }
 
+/// A shutdown guard, will close the queue when dropped
 #[derive(Debug)]
-pub struct ShutdownGuard(*mut ffi::kz_State);
+pub struct Guard(*mut ffi::kz_State);
 
-unsafe impl Send for ShutdownGuard {}
+unsafe impl Send for Guard {}
 
-impl Drop for ShutdownGuard {
+impl Drop for Guard {
     fn drop(&mut self) {
         unsafe { ffi::kz_shutdown(self.0) }
     }

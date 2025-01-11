@@ -1,0 +1,23 @@
+[package]
+name = "kaze-edge"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = "4.5.26"
+serde = "1.0.217"
+anyhow = "1.0.95"
+bytes = "1.9.0"
+metrics = "0.24.1"
+tokio = "1.43.0"
+tracing = "0.1.41"
+page_size = "0.6.0"
+
+[dependencies.clap-merge]
+path = "../clap_merge"
+
+[dependencies.kaze-core]
+path = "../core"
+
+[dependencies.kaze-utils]
+path = "../utils"

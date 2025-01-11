@@ -2,13 +2,12 @@ use std::{
     net::{Ipv4Addr, SocketAddr},
     path::PathBuf,
     sync::LazyLock,
-    time::Duration,
 };
 
 use anyhow::{bail, Context, Result};
-use clap::{crate_version, CommandFactory, FromArgMatches, Parser};
+use clap::{crate_version, Args, CommandFactory, FromArgMatches, Parser};
 use clap_merge::ClapMerge;
-use duration_string::DurationString;
+use kaze_utils::DurationString;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 use tracing_appender::{
@@ -39,7 +38,7 @@ pub fn parse_args() -> Result<Config> {
 }
 
 fn validate_args(args: &Config) -> Result<()> {
-    if args.kaze.ident == Ipv4Addr::UNSPECIFIED {
+    if args.edge.ident == Ipv4Addr::UNSPECIFIED {
         bail!("ident must be specified");
     }
     Ok(())
@@ -65,11 +64,6 @@ pub struct Config {
     #[serde(skip)]
     pub config: PathBuf,
 
-    /// Unlink shared memory object if it exists
-    #[arg(short, long, action = clap::ArgAction::SetTrue)]
-    #[serde(skip)]
-    pub unlink: bool,
-
     /// host command line to run after sidecar started
     #[arg(trailing_var_arg = true)]
     #[serde(skip)]
@@ -86,25 +80,25 @@ pub struct Config {
     #[arg(value_name = "N")]
     pub threads: Option<usize>,
 
-    /// Name of the shared memory object
-    #[command(flatten)]
-    pub kaze: KazeConfig,
-
     /// log file path
     #[command(flatten)]
-    pub log: Option<LogFileConfig>,
+    pub log: Option<LogFileOptions>,
 
-    /// register config
+    /// Name of the shared memory object
     #[command(flatten)]
-    pub register: RegisterConfig,
+    pub edge: kaze_edge::Options,
+
+    /// corral config
+    #[command(flatten)]
+    pub corral: kaze_corral::Options,
 
     /// rate limit for incomming packets
     #[command(flatten)]
-    pub rate_limit: Option<RateLimitConfig>,
+    pub rate_limit: Option<kaze_corral::ratelimit::Options>,
 
     /// resolver config
     #[command(flatten)]
-    pub resolver: ResolverConfig,
+    pub local: kaze_resolver::LocalOptions,
 
     /// location of consul server
     #[command(flatten)]
@@ -113,57 +107,16 @@ pub struct Config {
     /// prometheus push gateway
     #[command(flatten)]
     pub prometheus: Option<PromethusConfig>,
-
-    /// local ident mapping
-    #[arg(skip)]
-    pub nodes: Vec<NodeConfig>,
 }
 
 fn default_listen() -> String {
     "0.0.0.0:6081".to_string()
 }
 
-#[derive(ClapMerge, Parser, Serialize, Deserialize, Clone, Debug)]
-#[command(next_help_heading = "Shm queue configurations")]
-pub struct KazeConfig {
-    /// Name of the shared memory object
-    #[serde(default = "default_name")]
-    #[arg(short, long, default_value_t = default_name())]
-    pub name: String,
-
-    /// Identifier for the shared memory object
-    #[arg(short, long, default_value_t = Ipv4Addr::UNSPECIFIED)]
-    pub ident: Ipv4Addr,
-
-    /// Size of the request (sidecar to host) buffer for shared memory
-    #[serde(default = "default_sq_bufsize")]
-    #[arg(long, default_value_t = default_sq_bufsize())]
-    #[arg(value_name = "BYTES")]
-    pub sq_bufsize: usize,
-
-    /// Size of the response (host to sidecar) buffer for shared memory
-    #[serde(default = "default_cq_bufsize")]
-    #[arg(long, default_value_t = default_cq_bufsize())]
-    #[arg(value_name = "BYTES")]
-    pub cq_bufsize: usize,
-}
-
-fn default_name() -> String {
-    "kaze".to_string()
-}
-
-pub fn default_sq_bufsize() -> usize {
-    page_size::get() * 8
-}
-
-pub fn default_cq_bufsize() -> usize {
-    page_size::get() * 8
-}
-
 /// log file configuration
-#[derive(ClapMerge, Parser, Serialize, Deserialize, Clone, Debug)]
+#[derive(ClapMerge, Args, Serialize, Deserialize, Clone, Debug)]
 #[command(next_help_heading = "Log file configurations")]
-pub struct LogFileConfig {
+pub struct LogFileOptions {
     /// log file directory
     #[serde(default = "default_log_dir")]
     #[arg(long = "log-dir", default_value = default_log_dir().into_os_string())]
@@ -266,7 +219,7 @@ mod serde_rotation {
     }
 }
 
-impl LogFileConfig {
+impl LogFileOptions {
     /// build non-blocking writer from configuration
     pub fn build_writer(
         root: &Config,
@@ -300,108 +253,13 @@ impl LogFileConfig {
 
     fn format_log_name(root: &Config, prefix: &str) -> String {
         prefix
-            .replace("{name}", root.kaze.name.as_str())
-            .replace("{ident}", &root.kaze.ident.to_string())
+            .replace("{name}", root.edge.name.as_str())
+            .replace("{ident}", &root.edge.ident.to_string())
             .replace("{version}", VERSION.as_str())
     }
 }
 
-#[derive(ClapMerge, Parser, Serialize, Deserialize, Clone, Debug)]
-#[command(next_help_heading = "Incomming socket configurations")]
-pub struct RegisterConfig {
-    /// close timeout for pending connection
-    #[serde(default = "default_pending_timeout")]
-    #[arg(long, value_parser = parse_duration, default_value_t = default_pending_timeout())]
-    #[arg(value_name = "DURATION")]
-    pub pending_timeout: DurationString,
-
-    /// close timeout for idle connection
-    #[serde(default = "default_idle_timeout")]
-    #[arg(long, value_parser = parse_duration, default_value_t = default_idle_timeout())]
-    #[arg(value_name = "DURATION")]
-    pub idle_timeout: DurationString,
-}
-
-fn parse_duration(s: &str) -> Result<DurationString, String> {
-    s.parse::<DurationString>().map_err(|e| e.to_string())
-}
-
-fn default_pending_timeout() -> DurationString {
-    Duration::from_millis(500).into()
-}
-
-fn default_idle_timeout() -> DurationString {
-    Duration::from_millis(60_000).into()
-}
-
-#[derive(ClapMerge, Parser, Serialize, Deserialize, Clone, Debug)]
-#[command(next_help_heading = "Rate limit configurations")]
-pub struct RateLimitConfig {
-    /// max requests per duration
-    #[arg(long = "total-max", value_name = "N")]
-    pub max: Option<usize>,
-
-    /// initial requests when initialized
-    #[arg(long = "total-initial", value_name = "N", default_value_t = 0)]
-    pub initial: usize,
-
-    /// refill requests count per duration
-    #[arg(long = "total-refill", value_name = "N", default_value_t = 0)]
-    pub refill: usize,
-
-    /// refill interval
-    #[serde(default = "default_interval")]
-    #[arg(id = "rate_limit_interval", long = "total-interval")]
-    #[arg(value_parser = parse_duration, default_value_t = default_interval())]
-    #[arg(value_name = "DURATION")]
-    pub interval: DurationString,
-
-    #[arg(skip)]
-    pub per_msg: Vec<PerMsgLimitInfo>,
-}
-
-fn default_interval() -> DurationString {
-    Duration::from_millis(100).into()
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct PerMsgLimitInfo {
-    pub ident: Option<Ipv4Addr>,
-    pub body_type: Option<String>,
-
-    pub max: usize,
-    pub initial: usize,
-    pub refill: usize,
-
-    #[serde(default = "default_interval")]
-    pub interval: DurationString,
-}
-
-#[derive(ClapMerge, Parser, Serialize, Deserialize, Clone, Debug)]
-#[command(next_help_heading = "Local resolver configurations")]
-pub struct ResolverConfig {
-    /// Size of resolver mask cache
-    #[serde(default = "default_resolver_cache")]
-    #[arg(long, default_value_t = default_resolver_cache())]
-    #[arg(value_name = "BYTES")]
-    pub cache_size: usize,
-
-    /// Live time of entries in resolver mask cache
-    #[serde(default = "default_resolver_livetime")]
-    #[arg(long, value_parser = parse_duration, default_value_t = default_resolver_livetime())]
-    #[arg(value_name = "DURATION")]
-    pub live_time: DurationString,
-}
-
-fn default_resolver_cache() -> usize {
-    114514
-}
-
-fn default_resolver_livetime() -> DurationString {
-    Duration::from_secs(1).into()
-}
-
-#[derive(ClapMerge, Parser, Serialize, Deserialize, Clone, Debug)]
+#[derive(ClapMerge, Args, Serialize, Deserialize, Clone, Debug)]
 #[command(next_help_heading = "Consul resolver configurations")]
 pub struct ConsulConfig {
     #[serde(default = "default_consul_addr")]
@@ -418,7 +276,7 @@ fn default_consul_addr() -> String {
 }
 
 /// prometheus push gateway configuration
-#[derive(ClapMerge, Parser, Serialize, Deserialize, Clone, Debug)]
+#[derive(ClapMerge, Args, Serialize, Deserialize, Clone, Debug)]
 #[command(next_help_heading = "Prometheus metrics configurations")]
 pub struct PromethusConfig {
     /// prometheus metrics endpoint
@@ -451,13 +309,6 @@ pub struct PromethusConfig {
 
 fn default_metrics_listening() -> SocketAddr {
     "127.0.0.1:9090".parse().unwrap()
-}
-
-/// local ident -> node address mapping
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct NodeConfig {
-    pub ident: Ipv4Addr,
-    pub addr: SocketAddr,
 }
 
 #[test]

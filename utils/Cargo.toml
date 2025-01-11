@@ -17,5 +17,5 @@ clap = "4.5.23"
 rustyline = "15.0.0"
 bytes = "1.9.0"
 
-[dependencies.kaze_core]
-path = "../core"
+[dependencies.kaze-core]
+path = "../crates/core"

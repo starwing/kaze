@@ -2,7 +2,6 @@
 name = "kaze_sidecar"
 version = "0.1.0"
 edition = "2021"
-build = "build.rs"
 
 [dependencies]
 anyhow = { version = "1.0.95", features = ["backtrace"] }
@@ -12,33 +11,29 @@ tracing-appender = "0.2.3"
 bugreport = "0.5.0"
 metrics = "0.24.1"
 serde = "1.0.216"
-futures = "0.3.31"
-consul = "0.4.2"
 toml = "0.8.19"
-moka = { version = "0.12.8", features = ["future"] }
-leaky-bucket = { version = "1.1.2", features = ["tracing"] }
-prost = "0.13.4"
-duration-string = { version = "0.4.0", features = ["serde"] }
-bytes = "1.9.0"
 page_size = "0.6.0"
-rand = "0.8.5"
 
-[dependencies.kaze_core]
-path = "../core"
+[dependencies.kaze-utils]
+path = "../crates/utils"
 
-[dependencies.clap_merge]
-path = "../clap_merge"
+[dependencies.kaze-protocol]
+path = "../crates/protocol"
+
+[dependencies.kaze-edge]
+path = "../crates/edge"
+
+[dependencies.kaze-corral]
+path = "../crates/corral"
+
+[dependencies.kaze-resolver]
+path = "../crates/resolver"
+
+[dependencies.clap-merge]
+path = "../crates/clap_merge"
 
 [dependencies.tokio]
 version = "1.42.0"
-features = ["full"]
-
-[dependencies.tokio-util]
-version = "0.7.13"
-features = ["full"]
-
-[dependencies.tokio-stream]
-version = "0.1.17"
 features = ["full"]
 
 [dependencies.clap]
@@ -48,9 +43,6 @@ features = ["cargo", "derive", "string"]
 [dependencies.metrics-exporter-prometheus]
 version = "0.16.0"
 features = ["http-listener", "push-gateway", "tokio", "tracing"]
-
-[build-dependencies]
-prost-build = "0.13.4"
 
 [profile.release]
 opt-level = 3

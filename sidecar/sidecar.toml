@@ -1,11 +1,12 @@
 listen = "0.0.0.0:6081"
 threads = 0
 
-[kaze]
+[edge]
 name = "kaze_shm"
 ident = "0.0.0.1"
 # sq_bufsize = 65536
 # cq_bufsize = 65536
+# unlink = true
 
 [log]
 directory = "logs"
@@ -15,7 +16,7 @@ prefix = "{name}_{ident}"
 # level = "trace"
 # max_count = 10
 
-[register]
+[corral]
 # pending_timeout = "1s"
 # idle_timeout = "500ms"
 
@@ -33,21 +34,21 @@ prefix = "{name}_{ident}"
 # refill = 0  # 0 means use max
 # interval = "100ms"
 
-[resolver]
+[local]
 # cache_size = "114514"
 # live_time = "1s"
 
 pack_bufsize = 65536
 
-[[nodes]]
+[[local.nodes]]
 ident = "0.0.0.1"
 addr = "127.0.0.1:6081"
 
-[[nodes]]
+[[local.nodes]]
 ident = "0.0.0.2"
 addr = "127.0.0.1:6082"
 
-[[nodes]]
+[[local.nodes]]
 ident = "0.0.0.3"
 addr = "127.0.0.1:6083"
 

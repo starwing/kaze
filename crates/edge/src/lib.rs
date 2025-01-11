@@ -1,58 +1,16 @@
+mod options;
+
 use std::{borrow::Cow, net::Ipv4Addr, ptr::addr_of_mut, sync::Arc};
 
 use anyhow::{anyhow, bail, Context, Result};
 use bytes::{Buf, BufMut};
-use kaze_core::{self, KazeState};
 use metrics::counter;
 use tokio::{sync::Mutex, task::block_in_place};
 use tracing::{error, info, warn};
 
-use crate::config;
+use kaze_core::{self, KazeState};
 
-pub struct Options {
-    sq_bufsize: usize,
-    cq_bufsize: usize,
-    unlink: bool,
-}
-
-impl Options {
-    pub fn new() -> Self {
-        Self {
-            sq_bufsize: config::default_sq_bufsize(),
-            cq_bufsize: config::default_cq_bufsize(),
-            unlink: false,
-        }
-    }
-
-    pub fn with_sq_bufsize(mut self, sq_bufsize: usize) -> Self {
-        self.sq_bufsize = sq_bufsize;
-        self
-    }
-
-    pub fn with_cq_bufsize(mut self, cq_bufsize: usize) -> Self {
-        self.cq_bufsize = cq_bufsize;
-        self
-    }
-
-    pub fn with_unlink(mut self, unlink: bool) -> Self {
-        self.unlink = unlink;
-        self
-    }
-
-    pub fn build(
-        self,
-        prefix: impl AsRef<str>,
-        ident: Ipv4Addr,
-    ) -> Result<Edge> {
-        Edge::new_kaze_pair(
-            prefix,
-            ident,
-            self.sq_bufsize,
-            self.cq_bufsize,
-            self.unlink,
-        )
-    }
-}
+pub use options::Options;
 
 pub struct Edge {
     cq: KazeState, // completion queue
@@ -153,8 +111,8 @@ impl Receiver {
         Self { cq }
     }
 
-    pub fn lock(&self) -> kaze_core::ShutdownGuard {
-        self.cq.shutdown_guard()
+    pub fn lock(&self) -> kaze_core::Guard {
+        self.cq.lock()
     }
 
     pub async fn recv<'a>(
@@ -215,8 +173,8 @@ impl Sender {
         }
     }
 
-    pub async fn lock(&self) -> kaze_core::ShutdownGuard {
-        self.sq.lock().await.shutdown_guard()
+    pub async fn lock(&self) -> kaze_core::Guard {
+        self.sq.lock().await.lock()
     }
 
     pub async fn send(&self, buf: impl Buf) -> Result<()> {

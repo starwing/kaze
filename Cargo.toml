@@ -1,3 +1,13 @@
 [workspace]
 resolver = "2"
-members = ["clap_merge", "clap_merge/clap_merge_derive", "cli", "core", "sidecar", "utils"]
+members = [
+    "cli",
+    "crates/clap_merge",
+    "crates/clap_merge/clap_merge_derive",
+    "crates/core",
+    "crates/corral", "crates/edge",
+    "crates/protocol",
+    "crates/resolver", "crates/utils",
+    "sidecar",
+    "utils",
+]

@@ -1,27 +1,27 @@
-use std::{io::IoSlice, net::SocketAddr, sync::Arc, time::Duration};
+use std::io::IoSlice;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
 
-use anyhow::{Context, Error, Result};
-use bytes::BytesMut;
+use anyhow::{Context, Result};
+use futures::StreamExt;
+use kaze_protocol::{NetPacketCodec, NetPacketForwardCodec};
+use kaze_resolver::Resolver;
 use metrics::counter;
-use tokio::{
-    io::AsyncWriteExt,
-    net::{
-        tcp::{OwnedReadHalf, OwnedWriteHalf, ReuniteError},
-        TcpStream,
-    },
-    select,
-    sync::Mutex,
-};
-use tokio_stream::StreamExt;
+use tokio::io::AsyncWriteExt;
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf, ReuniteError};
+use tokio::net::TcpStream;
+use tokio::select;
+use tokio::sync::Mutex;
 use tokio_util::codec::{Decoder, FramedRead};
 use tracing::{enabled, error, trace};
 
-use crate::{
-    codec::{NetPacketCodec, NetPacketForwardCodec},
-    corral::Corral,
-    edge::Sender,
-    kaze::Hdr,
-};
+use crate::Corral;
+
+pub struct ReadConn {
+    inner: OwnedReadHalf,
+    addr: SocketAddr,
+}
 
 #[derive(Clone)]
 pub struct WriteConn {
@@ -68,24 +68,19 @@ impl WriteConn {
         Ok(())
     }
 }
-
-pub struct ReadConn {
-    inner: OwnedReadHalf,
-    addr: SocketAddr,
-}
-
 impl ReadConn {
     pub fn new(read_half: OwnedReadHalf, addr: SocketAddr) -> Self {
         let inner = read_half;
         Self { inner, addr }
     }
 
-    pub async fn main_loop(mut self, reg: Arc<Corral>, sender: Sender) {
-        let r = if enabled!(tracing::Level::TRACE) || reg.rate_limit.is_some()
+    pub async fn main_loop<R: Resolver>(mut self, corral: Arc<Corral<R>>) {
+        let r = if enabled!(tracing::Level::TRACE)
+            || corral.rate_limit.is_some()
         {
-            self.main_loop_tracing(reg.clone(), sender).await
+            self.main_loop_tracing(corral.clone()).await
         } else {
-            self.main_loop_forward(reg.clone(), sender).await
+            self.main_loop_forward(corral.clone()).await
         };
 
         if let Err(e) = r {
@@ -93,63 +88,54 @@ impl ReadConn {
             error!(error = %e, "Failed to handle connection");
         }
 
-        if let Err(e) = reg.close_connection(self.inner, self.addr).await {
+        if let Err(e) = corral.close_connection(self.inner, self.addr).await {
             counter!("kaze_close_errors_total").increment(1);
             error!(error = %e, "Failed to close connection");
         }
     }
 
-    async fn main_loop_forward(
+    async fn main_loop_forward<R: Resolver>(
         &mut self,
-        reg: Arc<Corral>,
-        sender: Sender,
+        reg: Arc<Corral<R>>,
     ) -> Result<()> {
         let mut transport =
             FramedRead::new(&mut self.inner, NetPacketForwardCodec {});
-        loop {
-            let data = Self::read_timeout::<NetPacketForwardCodec>(
-                &mut transport,
-                reg.idle_timeout,
-            )
-            .await?;
-            if let Some(mut data) = data {
-                sender
-                    .send(&mut data)
-                    .await
-                    .context("Failed to transfer packet")?
-            } else {
-                return Ok(());
-            }
+        while let Some(mut data) = Self::read_timeout::<NetPacketForwardCodec>(
+            &mut transport,
+            reg.options.idle_timeout.into(),
+        )
+        .await?
+        {
+            reg.sender
+                .send(&mut data)
+                .await
+                .context("Failed to transfer packet")?
         }
+        Ok(())
     }
 
-    async fn main_loop_tracing(
+    async fn main_loop_tracing<R: Resolver>(
         &mut self,
-        reg: Arc<Corral>,
-        sender: Sender,
+        reg: Arc<Corral<R>>,
     ) -> Result<()> {
         let mut transport =
             FramedRead::new(&mut self.inner, NetPacketCodec {});
-        loop {
-            let data: Option<(Hdr, BytesMut)> =
-                Self::read_timeout::<NetPacketCodec>(
-                    &mut transport,
-                    reg.idle_timeout,
-                )
-                .await?;
-            if let Some((hdr, mut data)) = data {
-                trace!(hdr = ?hdr, len = data.len(), "transfer packet");
-                if let Some(limiter) = &reg.rate_limit {
-                    limiter.acquire_one(hdr.src_ident, &hdr.body_type).await;
-                }
-                sender
-                    .send(&mut data)
-                    .await
-                    .context("Failed to transfer packet")?;
-            } else {
-                return Ok(());
+        while let Some((hdr, mut data)) = Self::read_timeout::<NetPacketCodec>(
+            &mut transport,
+            reg.options.idle_timeout.into(),
+        )
+        .await?
+        {
+            trace!(hdr = ?hdr, len = data.len(), "transfer packet");
+            if let Some(limiter) = &reg.rate_limit {
+                limiter.acquire_one(hdr.src_ident, &hdr.body_type).await;
             }
+            reg.sender
+                .send(&mut data)
+                .await
+                .context("Failed to transfer packet")?;
         }
+        Ok(())
     }
 
     async fn read_timeout<D>(
@@ -158,7 +144,7 @@ impl ReadConn {
     ) -> Result<Option<<D as Decoder>::Item>>
     where
         D: Decoder,
-        <D as Decoder>::Error: Into<Error>,
+        <D as Decoder>::Error: Into<anyhow::Error>,
     {
         Ok(select! {
             pkg = transport.next() => {

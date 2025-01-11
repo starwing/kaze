@@ -72,13 +72,18 @@ fn impl_merge(
                 cur_default = def;
             } else if attr.path().is_ident("command") {
                 // Parse nested attributes
-                attr.parse_nested_meta(|nested| {
-                    if nested.path.is_ident("flatten") {
-                        recursive = true;
-                        skip_field = false;
+                let punctuated = attr.parse_args_with(
+                    Punctuated::<Expr, Comma>::parse_terminated,
+                )?;
+
+                for item in punctuated {
+                    if let Expr::Path(p) = &item {
+                        if p.path.is_ident("flatten") {
+                            recursive = true;
+                            skip_field = false;
+                        }
                     }
-                    Ok(())
-                })?;
+                }
             } else if attr.path().is_ident("subcommand") {
                 recursive = true;
                 skip_field = false;

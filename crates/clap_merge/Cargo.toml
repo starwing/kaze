@@ -1,10 +1,10 @@
 [package]
-name = "clap_merge"
+name = "clap-merge"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 clap = "4.5.23"
 
-[dependencies.clap_merge_derive]
+[dependencies.clap-merge-derive]
 path = "clap_merge_derive"

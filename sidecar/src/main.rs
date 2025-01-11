@@ -1,25 +1,11 @@
-// mod args;
-mod codec;
 mod config;
-mod connection;
-mod corral;
-mod dispatcher;
-mod edge;
-mod ratelimit;
-mod resolver;
-mod kaze {
-    include!("proto/kaze.rs");
-}
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use config::parse_args;
-use edge::{Edge, Receiver};
 use metrics::counter;
-use ratelimit::RateLimit;
-use tokio::select;
 use tokio::{net::TcpListener, try_join};
 use tracing::level_filters::LevelFilter;
 use tracing::{error, info, span, trace, Level};
@@ -27,10 +13,11 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{fmt, EnvFilter};
 
-use crate::config::LogFileConfig;
-use crate::corral::Corral;
-use crate::dispatcher::Dispatcher;
-use crate::resolver::Resolver;
+use kaze_corral::{Corral, Dispatcher, RateLimit};
+use kaze_edge::{Edge, Receiver};
+use kaze_resolver::Resolver;
+
+use crate::config::LogFileOptions;
 
 #[allow(unreachable_code)]
 #[allow(unused_variables)]
@@ -39,7 +26,7 @@ async fn main() -> Result<()> {
     let app = parse_args().context("Failed to parse config")?;
 
     let (non_block, _guard) =
-        LogFileConfig::build_writer(&app, app.log.as_ref())?;
+        LogFileOptions::build_writer(&app, app.log.as_ref())?;
 
     if let Some(rate_limit) = &app.rate_limit {
         counter!("kaze_rate_limit_total")
@@ -90,24 +77,21 @@ async fn main() -> Result<()> {
     let _enter = span.enter();
 
     // create edge
-    let edge = edge::Options::new()
-        .with_sq_bufsize(app.kaze.sq_bufsize)
-        .with_cq_bufsize(app.kaze.cq_bufsize)
-        .with_unlink(app.unlink)
-        .build(&app.kaze.name, app.kaze.ident)
+    let (name, ident) = (app.edge.name.clone(), app.edge.ident);
+    let edge = app
+        .edge
+        .build()
         .context("Failed to create kaze shm queue")?;
     info!("submission queue created name={}", edge.sq_name());
     info!("completion queue created name={}", edge.cq_name());
 
-    let mut resolver =
-        Resolver::new(app.resolver.cache_size, app.resolver.live_time);
-    resolver.setup_local(app.nodes.iter()).await;
-    if let Some(conf) = &app.consul {
-        resolver
-            .setup_consul(conf.addr.clone(), conf.consul_token.clone())
-            .await
-            .context("Failed to setup consul client")?;
-    }
+    let resolver = app.local.build().await;
+    // if let Some(conf) = &app.consul {
+    //     resolver
+    //         .setup_consul(conf.addr.clone(), conf.consul_token.clone())
+    //         .await
+    //         .context("Failed to setup consul client")?;
+    // }
 
     if app.host_cmd.len() > 0 {
         let mut cmd = std::process::Command::new(&app.host_cmd[0]);
@@ -118,12 +102,11 @@ async fn main() -> Result<()> {
 
     let (receiver, sender) = edge.split();
 
-    let corral = Arc::new(Corral::new(
-        rate_limit,
-        app.register.pending_timeout,
-        app.register.idle_timeout,
-    ));
-    let sqlock = sender.lock().await;
+    let corral = Arc::new(
+        kaze_corral::Builder::from_options(app.corral, resolver, sender)
+            .with_rate_limit(rate_limit)
+            .build(),
+    );
     let dispatcher = Dispatcher::new();
 
     // start listening at last
@@ -132,89 +115,44 @@ async fn main() -> Result<()> {
         .context("Failed to bind local address")?;
     info!(addr = app.listen, "start listening");
 
-    let exit_notify = Arc::new(tokio::sync::Notify::new());
     {
         let cqlock = receiver.lock();
-        let exit_notify = exit_notify.clone();
+        let corral = corral.clone();
         tokio::spawn(async move {
             tokio::signal::ctrl_c()
                 .await
                 .expect("Failed to wait for ctrl-c");
             info!("ctrl-c received");
-            exit_notify.notify_waiters();
+            corral.notify_exit();
             drop(cqlock);
         });
     }
 
     try_join!(
-        handle_listener(&listener, &sender, &exit_notify, &corral, &resolver),
-        handle_completion_queue(
-            receiver,
-            &sender,
-            &dispatcher,
-            &corral,
-            &resolver,
-        )
+        corral.handle_listener(&listener),
+        handle_completion_queue(receiver, &dispatcher, &corral)
     )
     .context("Failed to in main loop")?;
 
-    // shutdown submission queue, do not allow new requests
-    drop(sqlock);
-    info!("submission queue closed");
-
-    info!("graceful exiting start ...");
+    info!("corral graceful exiting start ...");
     corral.graceful_exit().await?;
-    info!("register graceful exited");
+    info!("corral graceful exited");
 
-    Edge::unlink(&app.kaze.name, app.kaze.ident)?;
-    info!("graceful exiting completed");
+    Edge::unlink(&name, ident)?;
+    info!("kaze shared memory files unlinked");
     Ok(())
 }
 
-#[tracing::instrument(
-    level = "trace",
-    skip(listener, sender, exit_notify, corral, resolver)
-)]
-async fn handle_listener(
-    listener: &TcpListener,
-    sender: &edge::Sender,
-    exit_notify: &Arc<tokio::sync::Notify>,
-    corral: &Arc<Corral>,
-    resolver: &Resolver,
-) -> Result<()> {
-    loop {
-        let (socket, addr) = select! {
-            _ = exit_notify.notified() => {
-                info!("stop listening");
-                return Ok(());
-            },
-            r = listener.accept() => r?,
-        };
-        info!(addr = %addr, "Accepted connection");
-        corral
-            .handle_incomming(socket, addr, resolver, sender)
-            .await?;
-    }
-}
-
-#[tracing::instrument(
-    level = "trace",
-    skip(receiver, sender, dispatcher, reg, resolver)
-)]
-async fn handle_completion_queue(
+#[tracing::instrument(level = "trace", skip(receiver, dispatcher, corral))]
+async fn handle_completion_queue<R: Resolver>(
     mut receiver: Receiver,
-    sender: &edge::Sender,
     dispatcher: &Dispatcher,
-    reg: &Arc<Corral>,
-    resolver: &Resolver,
+    corral: &Arc<Corral<R>>,
 ) -> Result<()> {
     while let Some(ctx) = receiver.recv().await? {
         let mut data = ctx.buffer();
-        let hdr = codec::decode_packet(&mut data)?;
-        if let Err(e) = dispatcher
-            .dispatch(&hdr, &data, &reg, resolver, sender)
-            .await
-        {
+        let hdr = kaze_protocol::decode_packet(&mut data)?;
+        if let Err(e) = dispatcher.dispatch(&hdr, &data, &corral).await {
             counter!("kaze_dispatch_errors_total").increment(1);
             error!("Error dispatching packet: {e}");
             // continue running

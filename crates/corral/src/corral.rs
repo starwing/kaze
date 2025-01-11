@@ -1,53 +1,91 @@
-use std::sync::Arc;
-use std::time::Duration;
-use std::{collections::HashMap, net::SocketAddr};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
+use crate::{options::Options, Builder, RateLimit};
+use crate::{ReadConn, WriteConn};
 use anyhow::{bail, Context, Result};
+use futures::StreamExt;
+use kaze_protocol::NetPacketCodec;
+use kaze_resolver::Resolver;
 use metrics::{counter, gauge};
+use tokio::io::AsyncWriteExt;
+use tokio::net::tcp::OwnedReadHalf;
+use tokio::net::TcpStream;
+use tokio::select;
 use tokio::{
-    io::AsyncWriteExt,
-    net::{tcp::OwnedReadHalf, TcpStream},
-    select,
-    sync::Mutex,
+    net::TcpListener,
+    sync::{Mutex, Notify},
     task::JoinSet,
 };
-use tokio_stream::StreamExt;
 use tokio_util::codec::FramedRead;
-use tracing::{error, trace};
+use tracing::{error, info, trace};
 
-use crate::codec::NetPacketCodec;
-use crate::connection::{ReadConn, WriteConn};
-use crate::edge;
-use crate::ratelimit::RateLimit;
-use crate::resolver::Resolver;
-
-/// register new incomming connection into socket pool
-pub struct Corral {
+/// corral: the incomming Socket manager
+pub struct Corral<R: Resolver> {
+    pub(crate) options: Options,
     sock_map: Mutex<HashMap<SocketAddr, WriteConn>>,
-    pub(crate) pending_timeout: Duration,
-    pub(crate) idle_timeout: Duration,
-    pub(crate) rate_limit: Option<RateLimit>,
     join_set: Mutex<JoinSet<()>>,
+    pub(crate) rate_limit: Option<RateLimit>,
+    resolver: R,
+    pub(crate) sender: kaze_edge::Sender,
+    exit: Notify,
 }
 
-impl Corral {
-    /// create a new register
-    pub fn new(
-        rate_limit: Option<RateLimit>,
-        pending_timeout: impl Into<Duration>,
-        idle_timeout: impl Into<Duration>,
-    ) -> Self {
+/// creation and exit
+impl<R: Resolver> Corral<R> {
+    /// create a new corral object
+    pub(crate) fn new(builder: Builder<R>) -> Self {
         Self {
+            options: builder.options,
             sock_map: Mutex::new(HashMap::new()),
-            rate_limit,
-            pending_timeout: pending_timeout.into(),
-            idle_timeout: idle_timeout.into(),
             join_set: Mutex::new(JoinSet::new()),
+            rate_limit: builder.rate_limit,
+            resolver: builder.resolver,
+            sender: builder.sender,
+            exit: Notify::new(),
+        }
+    }
+
+    /// notify all tasks to exit
+    pub fn notify_exit(&self) {
+        self.exit.notify_waiters();
+    }
+
+    /// wait for all tasks to exit
+    pub async fn wait_exit(&self) {
+        self.exit.notified().await;
+    }
+
+    /// get resolver
+    pub fn resolver(&self) -> &R {
+        &self.resolver
+    }
+
+    /// handle listener
+    #[tracing::instrument(level = "trace", skip(self, listener))]
+    pub async fn handle_listener(
+        self: &Arc<Self>,
+        listener: &TcpListener,
+    ) -> Result<()> {
+        loop {
+            let (socket, addr) = select! {
+                _ = self.wait_exit() => {
+                    info!("stop listening");
+                    return Ok(());
+                },
+                r = listener.accept() => r?,
+            };
+            info!(addr = %addr, "Accepted connection");
+            self.handle_incomming(socket, addr).await?;
         }
     }
 
     /// gracefully exit
     pub async fn graceful_exit(self: Arc<Self>) -> Result<()> {
+        // shutdown submission queue, do not allow new requests
+        self.close_sender().await;
+        info!("submission queue closed");
+
+        // wait for all tasks to finish
         let mut join_set = self.join_set.lock().await;
         while let Some(res) = join_set.join_next().await {
             if let Err(e) = res {
@@ -57,14 +95,19 @@ impl Corral {
         Ok(())
     }
 
+    pub async fn close_sender(self: &Arc<Self>) {
+        self.sender.lock().await;
+    }
+}
+
+/// connection manager
+impl<R: Resolver> Corral<R> {
     /// handle incomming connection
-    #[tracing::instrument(level = "trace", skip(self, resolver, sender))]
+    #[tracing::instrument(level = "trace", skip(self))]
     pub async fn handle_incomming(
         self: &Arc<Self>,
         stream: TcpStream,
         addr: SocketAddr,
-        resolver: &Resolver,
-        sender: &edge::Sender,
     ) -> Result<()> {
         let mut transport = FramedRead::new(stream, NetPacketCodec {});
 
@@ -72,46 +115,36 @@ impl Corral {
         let (hdr, mut data) = select! {
             pkg = transport.next() => if let Some(pkg) = pkg { pkg? }
                 else {
-                    println!("exit");
                     return Ok(());
                 },
-            _ = tokio::time::sleep(self.pending_timeout) => {
+            _ = tokio::time::sleep(self.options.pending_timeout.into()) => {
                 counter!("kaze_read_timeout_total").increment(1);
-                println!("timeout");
                 return Ok(());
             }
         };
 
         // 2. transfer the packet
         trace!(hdr = ?hdr, len = data.len(), "transfer packet");
-        sender.send(&mut data).await?;
+        self.sender.send(&mut data).await?;
 
         // 3. add valid connection
-        self.add_connection(
-            transport.into_inner(),
-            hdr.src_ident,
-            addr,
-            resolver,
-            sender,
-        )
-        .await;
+        self.add_connection(transport.into_inner(), hdr.src_ident, addr)
+            .await;
 
         Ok(())
     }
 
     /// find a node that matches the ident
-    #[tracing::instrument(level = "trace", skip(self, resolver, sender))]
+    #[tracing::instrument(level = "trace", skip(self))]
     pub async fn find_or_create(
         self: &Arc<Self>,
         ident: u32,
-        resolver: &Resolver,
-        sender: &edge::Sender,
     ) -> Result<WriteConn> {
-        if let Some(addr) = resolver.get_node(ident).await {
+        if let Some(addr) = self.resolver.get_node(ident).await {
             if let Some(sock) = self.sock_map.lock().await.get(&addr) {
                 Ok(sock.clone())
             } else {
-                self.try_connect(ident, addr, resolver, sender)
+                self.try_connect(ident, addr)
                     .await
                     .context("Failed to connect")
             }
@@ -124,14 +157,10 @@ impl Corral {
         self: &Arc<Self>,
         ident: u32,
         addr: SocketAddr,
-        resolver: &Resolver,
-        sender: &edge::Sender,
     ) -> Result<WriteConn> {
         let stream = TcpStream::connect(addr).await;
         match stream {
-            Ok(stream) => Ok(self
-                .add_connection(stream, ident, addr, resolver, sender)
-                .await),
+            Ok(stream) => Ok(self.add_connection(stream, ident, addr).await),
             Err(e) => {
                 counter!("kaze_connect_errors_total").increment(1);
                 bail!("connect error: {}", e);
@@ -144,20 +173,18 @@ impl Corral {
         stream: TcpStream,
         ident: u32,
         addr: SocketAddr,
-        resolver: &Resolver,
-        sender: &edge::Sender,
     ) -> WriteConn {
         let (read_half, write_half) = stream.into_split();
 
         // 1. add connection to the map
         let write_conn = WriteConn::new(write_half, addr);
-        resolver.add_node(ident, addr).await;
+        self.resolver.add_node(ident, addr).await;
         self.sock_map.lock().await.insert(addr, write_conn.clone());
 
         // 2. spawn a new task to handle send to this socket
         let read_conn = ReadConn::new(read_half, addr);
         let mut join_set = self.join_set.lock().await;
-        join_set.spawn(read_conn.main_loop(self.clone(), sender.clone()));
+        join_set.spawn(read_conn.main_loop(self.clone()));
         gauge!("kaze_connections_total").increment(1);
         write_conn
     }
