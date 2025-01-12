@@ -8,7 +8,7 @@ use clap_merge::ClapMerge;
 use kaze_utils::{parse_duration, DurationString};
 use serde::{Deserialize, Serialize};
 
-use crate::{LocalResolver, Resolver};
+use crate::{Cached, Local, Resolver};
 
 #[derive(ClapMerge, Args, Serialize, Deserialize, Clone, Debug)]
 #[command(next_help_heading = "Local resolver configurations")]
@@ -31,8 +31,9 @@ pub struct Options {
 }
 
 impl Options {
-    pub async fn build(self) -> LocalResolver {
-        let resolver = LocalResolver::new(self.cache_size, self.live_time);
+    pub async fn build(self) -> impl Resolver {
+        let resolver =
+            Cached::new(Local::new(), self.cache_size, self.live_time);
         for node in self.nodes {
             resolver.add_node(node.ident.to_bits(), node.addr).await;
         }
