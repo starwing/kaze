@@ -12,13 +12,9 @@ bugreport = "0.5.0"
 metrics = "0.24.1"
 serde = "1.0.216"
 toml = "0.8.19"
-page_size = "0.6.0"
 
 [dependencies.kaze-utils]
 path = "../crates/utils"
-
-[dependencies.kaze-protocol]
-path = "../crates/protocol"
 
 [dependencies.kaze-edge]
 path = "../crates/edge"

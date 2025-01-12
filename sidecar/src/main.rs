@@ -8,31 +8,21 @@ use config::parse_args;
 use metrics::counter;
 use tokio::{net::TcpListener, try_join};
 use tracing::level_filters::LevelFilter;
-use tracing::{error, info, span, trace, Level};
+use tracing::{info, span, Level};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{fmt, EnvFilter};
 
-use kaze_corral::{Corral, Dispatcher, RateLimit};
-use kaze_edge::{Edge, Receiver};
-use kaze_resolver::Resolver;
+use kaze_corral::RateLimit;
+use kaze_edge::Edge;
 
 use crate::config::LogFileOptions;
 
-#[allow(unreachable_code)]
-#[allow(unused_variables)]
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let app = parse_args().context("Failed to parse config")?;
 
     let (non_block, _guard) =
         LogFileOptions::build_writer(&app, app.log.as_ref())?;
-
-    if let Some(rate_limit) = &app.rate_limit {
-        counter!("kaze_rate_limit_total")
-            .increment(rate_limit.per_msg.len() as u64);
-    }
-    let rate_limit = app.rate_limit.as_ref().map(|info| RateLimit::new(info));
 
     // install tracing with configuration
     tracing_subscriber::registry()
@@ -78,12 +68,31 @@ async fn main() -> Result<()> {
 
     // create edge
     let (name, ident) = (app.edge.name.clone(), app.edge.ident);
-    let edge = app
-        .edge
-        .build()
-        .context("Failed to create kaze shm queue")?;
-    info!("submission queue created name={}", edge.sq_name());
-    info!("completion queue created name={}", edge.cq_name());
+
+    // 创建运行时，并设置线程数量为 4
+    let mut runtime = tokio::runtime::Builder::new_multi_thread();
+    if let Some(threads) = app.threads {
+        if threads > 0 {
+            runtime.worker_threads(threads);
+        }
+    }
+
+    runtime
+        .enable_all() // 启用所有功能（I/O、计时器等）
+        .build()?
+        .block_on(async_main(app))?;
+
+    Edge::unlink(&name, ident)?;
+    info!("kaze shared memory files unlinked");
+    Ok(())
+}
+
+async fn async_main(app: config::Config) -> Result<()> {
+    if let Some(rate_limit) = &app.rate_limit {
+        counter!("kaze_rate_limit_total")
+            .increment(rate_limit.per_msg.len() as u64);
+    }
+    let rate_limit = app.rate_limit.as_ref().map(|info| RateLimit::new(info));
 
     let resolver = app.local.build().await;
     // if let Some(conf) = &app.consul {
@@ -100,14 +109,20 @@ async fn main() -> Result<()> {
         info!("start host command");
     }
 
+    let ident = app.edge.ident.to_bits();
+    let edge = app
+        .edge
+        .build()
+        .context("Failed to create kaze shm queue")?;
+    info!("submission queue created name={}", edge.sq_name());
+    info!("completion queue created name={}", edge.cq_name());
     let (receiver, sender) = edge.split();
 
     let corral = Arc::new(
         kaze_corral::Builder::from_options(app.corral, resolver, sender)
             .with_rate_limit(rate_limit)
-            .build(),
+            .build(ident),
     );
-    let dispatcher = Dispatcher::new();
 
     // start listening at last
     let listener = TcpListener::bind(&app.listen)
@@ -130,7 +145,8 @@ async fn main() -> Result<()> {
 
     try_join!(
         corral.handle_listener(&listener),
-        handle_completion_queue(receiver, &dispatcher, &corral)
+        corral.handle_completion(receiver),
+        corral.handle_rpc(),
     )
     .context("Failed to in main loop")?;
 
@@ -138,28 +154,5 @@ async fn main() -> Result<()> {
     corral.graceful_exit().await?;
     info!("corral graceful exited");
 
-    Edge::unlink(&name, ident)?;
-    info!("kaze shared memory files unlinked");
-    Ok(())
-}
-
-#[tracing::instrument(level = "trace", skip(receiver, dispatcher, corral))]
-async fn handle_completion_queue<R: Resolver>(
-    mut receiver: Receiver,
-    dispatcher: &Dispatcher,
-    corral: &Arc<Corral<R>>,
-) -> Result<()> {
-    while let Some(ctx) = receiver.recv().await? {
-        let mut data = ctx.buffer();
-        let hdr = kaze_protocol::decode_packet(&mut data)?;
-        if let Err(e) = dispatcher.dispatch(&hdr, &data, &corral).await {
-            counter!("kaze_dispatch_errors_total").increment(1);
-            error!("Error dispatching packet: {e}");
-            // continue running
-        }
-        trace!(hdr = ?hdr, len = data.len(), "dispatch packet");
-        ctx.commit();
-        counter!("kaze_completion_packets_total").increment(1);
-    }
     Ok(())
 }

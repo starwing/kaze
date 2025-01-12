@@ -5,9 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.95"
-clap-serde-derive = "0.2.1"
 serde = "1.0.217"
-toml = "0.8.19"
 
 [dependencies.clap]
 version = "4.5.23"

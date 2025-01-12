@@ -1,12 +1,9 @@
-use std::io::IoSlice;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use futures::StreamExt;
-use kaze_protocol::{NetPacketCodec, NetPacketForwardCodec};
-use kaze_resolver::Resolver;
 use metrics::counter;
 use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf, ReuniteError};
@@ -14,7 +11,10 @@ use tokio::net::TcpStream;
 use tokio::select;
 use tokio::sync::Mutex;
 use tokio_util::codec::{Decoder, FramedRead};
-use tracing::{enabled, error, trace};
+use tracing::{error, trace};
+
+use kaze_protocol::{NetPacketCodec, Packet};
+use kaze_resolver::Resolver;
 
 use crate::Corral;
 
@@ -50,24 +50,20 @@ impl WriteConn {
         }
     }
 
-    pub async fn dispatch(self, data: &kaze_core::Bytes<'_>) -> Result<()> {
-        let size_buf = (data.len() as u32).to_le_bytes();
-        let (s1, s2) = data.as_slice();
+    pub async fn send(self, data: &Packet<'_>) -> Result<()> {
+        let mut iovec = data.as_iovec();
         let written = self
             .inner
             .lock()
             .await
-            .write_vectored(&[
-                IoSlice::new(&size_buf),
-                IoSlice::new(s1),
-                IoSlice::new(s2),
-            ])
+            .write_vectored(&iovec.to_iovec())
             .await
             .context("Failed to write to socket")?;
         counter!("kaze_write_packets_total").increment(written as u64);
         Ok(())
     }
 }
+
 impl ReadConn {
     pub fn new(read_half: OwnedReadHalf, addr: SocketAddr) -> Self {
         let inner = read_half;
@@ -75,13 +71,7 @@ impl ReadConn {
     }
 
     pub async fn main_loop<R: Resolver>(mut self, corral: Arc<Corral<R>>) {
-        let r = if enabled!(tracing::Level::TRACE)
-            || corral.rate_limit.is_some()
-        {
-            self.main_loop_tracing(corral.clone()).await
-        } else {
-            self.main_loop_forward(corral.clone()).await
-        };
+        let r = self.main_loop_tracing(corral.clone()).await;
 
         if let Err(e) = r {
             counter!("kaze_connection_errors_total").increment(1);
@@ -94,46 +84,22 @@ impl ReadConn {
         }
     }
 
-    async fn main_loop_forward<R: Resolver>(
-        &mut self,
-        reg: Arc<Corral<R>>,
-    ) -> Result<()> {
-        let mut transport =
-            FramedRead::new(&mut self.inner, NetPacketForwardCodec {});
-        while let Some(mut data) = Self::read_timeout::<NetPacketForwardCodec>(
-            &mut transport,
-            reg.options.idle_timeout.into(),
-        )
-        .await?
-        {
-            reg.sender
-                .send(&mut data)
-                .await
-                .context("Failed to transfer packet")?
-        }
-        Ok(())
-    }
-
     async fn main_loop_tracing<R: Resolver>(
         &mut self,
         reg: Arc<Corral<R>>,
     ) -> Result<()> {
         let mut transport =
             FramedRead::new(&mut self.inner, NetPacketCodec {});
-        while let Some((hdr, mut data)) = Self::read_timeout::<NetPacketCodec>(
+        while let Some(data) = Self::read_timeout::<NetPacketCodec>(
             &mut transport,
-            reg.options.idle_timeout.into(),
+            reg.idle_timeout(),
         )
         .await?
         {
-            trace!(hdr = ?hdr, len = data.len(), "transfer packet");
-            if let Some(limiter) = &reg.rate_limit {
-                limiter.acquire_one(hdr.src_ident, &hdr.body_type).await;
-            }
-            reg.sender
-                .send(&mut data)
-                .await
-                .context("Failed to transfer packet")?;
+            let hdr = data.hdr();
+            trace!(hdr = ?hdr, len = data.body_len(), "transfer packet");
+            reg.acqure_token(hdr.src_ident, &hdr.body_type).await;
+            reg.send(&data).await.context("Failed to transfer packet")?;
         }
         Ok(())
     }
@@ -146,7 +112,7 @@ impl ReadConn {
         D: Decoder,
         <D as Decoder>::Error: Into<anyhow::Error>,
     {
-        Ok(select! {
+        let r = select! {
             pkg = transport.next() => {
                 if let Some(pkg) = pkg {
                     Some(pkg.context("Failed to read packet")?)
@@ -159,6 +125,7 @@ impl ReadConn {
                 counter!("kaze_read_timeout_total").increment(1);
                 None
             }
-        })
+        };
+        Ok(r)
     }
 }

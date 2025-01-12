@@ -173,6 +173,10 @@ impl Sender {
         }
     }
 
+    pub async fn ident(&self) -> u32 {
+        self.sq.lock().await.ident()
+    }
+
     pub async fn lock(&self) -> kaze_core::Guard {
         self.sq.lock().await.lock()
     }

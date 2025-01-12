@@ -1,6 +1,7 @@
 use bytes::{buf::UninitSlice, Buf, BufMut};
 use std::fmt::Display;
 
+#[derive(Clone)]
 pub struct Bytes<'a> {
     slice: (&'a [u8], &'a [u8]),
     pos: usize,
@@ -21,6 +22,11 @@ impl Bytes<'_> {
 
     pub fn rewind(&mut self) {
         self.pos = 0;
+    }
+
+    pub fn set_pos(&mut self, pos: usize) {
+        assert!(pos <= self.len());
+        self.pos = pos;
     }
 
     pub fn as_slice(&self) -> (&[u8], &[u8]) {

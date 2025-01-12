@@ -70,7 +70,7 @@ impl<R: Resolver> Builder<R> {
     }
 
     /// build corral
-    pub fn build(self) -> Corral<R> {
-        Corral::new(self)
+    pub fn build(self, ident: u32) -> Corral<R> {
+        Corral::new(self, ident)
     }
 }

@@ -1,35 +1,54 @@
 syntax = "proto3";
 package kaze;
 
+enum RetCode {
+  RET_OK = 0;
+  RET_UNREACHABLE = 1; // Can not find route to destination
+  RET_TIMEOUT = 2;     // request timeout
+}
+
 message Hdr {
+  // basic info
   string bodyType = 1;
   uint32 srcIdent = 2;
-  uint32 seq = 3;
-  uint32 ack = 4;
 
-  oneof routeType {
-    // send pkg to dstIdent
-    uint32 dstIdent = 5;
-    // send pkg to one of idents that match ident with mask
-    DstMask dstRandom = 6;
-    // send pkg to all idents that match ident with mask
-    DstMask dstBroadcast = 7;
-    // send pkg to all idents that match ident with mask
-    DstMulticast dstMulticast = 8;
+  // rpc related info
+  uint32 retCode = 3;
+  uint32 version = 4;
+
+  // when has timeout, a response packet is expected
+  uint32 timeout = 5; // == 0 means no timeout
+
+  oneof rpcType {
+    uint32 req = 6; // request sequence number
+    uint32 rsp = 7; // the request sequence number that responds to
+    uint32 ntf = 8; // notify sequence number
   }
 
-  // ident selector with mask. only match if dstIdent & mask == ident
+  // custom extra data
+  map<string, bytes> headers = 9;
+
+  // route type
+  oneof routeType {
+    // send pkg to dstIdent
+    uint32 dstIdent = 10;
+    // send pkg to one of idents that match ident with mask
+    DstMask dstRandom = 11;
+    // send pkg to all idents that match ident with mask
+    DstMask dstBroadcast = 12;
+    // send pkg to all idents that match ident with mask
+    DstMulticast dstMulticast = 13;
+  }
+
+  // ident selector with mask. only match if (dstIdent & mask) == ident
   message DstMask {
     uint32 ident = 1;
     uint32 mask = 2;
   }
 
+  // destination ident list for multicast
   message DstMulticast {
     // all idents that the pkg will be sent to
     repeated uint32 dstIdents = 1;
   }
-
-  map<string, string> headers = 9;
-  uint32 retCode = 10;
-  uint32 version = 11;
 }

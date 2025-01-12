@@ -1,11 +1,13 @@
 use std::io::{Error, ErrorKind};
 
 use anyhow::{bail, Context, Result};
-use bytes::{Buf, BufMut, Bytes, BytesMut};
 use prost::Message;
-use tokio_util::codec::{Decoder, Encoder};
+use tokio_util::{
+    bytes::{Buf, BufMut, Bytes, BytesMut},
+    codec::{Decoder, Encoder},
+};
 
-use crate::kaze;
+use crate::{proto, Packet};
 
 /// Network packet codec
 ///
@@ -14,12 +16,12 @@ use crate::kaze;
 /// total_size = hdr_size + body.len()
 ///
 /// After decode, the buffer will be split to (hdr, data)
-/// which the data contains [hdr_size(4)][hdr][body] for forwarding to kaze
+/// which the data contains [hdr_size(4)][hdr][body] for forwarding to proto
 /// queue without encode again.
 pub struct NetPacketCodec {}
 
 impl Decoder for NetPacketCodec {
-    type Item = (kaze::Hdr, BytesMut);
+    type Item = Packet<'static>;
     type Error = anyhow::Error;
 
     #[tracing::instrument(skip(self, src))]
@@ -27,7 +29,7 @@ impl Decoder for NetPacketCodec {
         &mut self,
         src: &mut BytesMut,
     ) -> Result<Option<Self::Item>, Self::Error> {
-        let mut reader = BufAdaptor::new(&src);
+        let mut reader = BufWrapper::new(&src);
         if reader.remaining() < size_of::<u32>() {
             src.reserve(size_of::<u32>() * 2);
             return Ok(None);
@@ -39,23 +41,25 @@ impl Decoder for NetPacketCodec {
         }
         src.advance(size_of::<u32>());
         let data = src.split_to(size);
-        let mut reader = BufAdaptor::new(&data);
+        let mut reader = BufWrapper::new(&data);
         let hdr_size = reader.get_u32_le() as usize;
         if hdr_size > size {
             bail!("Invalid packet header size={} hdr_size={}", size, hdr_size);
         }
-        let hdr = kaze::Hdr::decode(reader.take(hdr_size))
+        let hdr = proto::Hdr::decode(reader.take(hdr_size))
             .context("Failed to decode packet")?;
-        Ok(Some((hdr, data)))
+        let mut data = BufWrapper::new(data);
+        data.advance(hdr_size + size_of::<u32>());
+        Ok(Some(Packet::from_node(hdr, data)?))
     }
 }
 
-impl Encoder<(kaze::Hdr, Bytes)> for NetPacketCodec {
+impl Encoder<(proto::Hdr, Bytes)> for NetPacketCodec {
     type Error = anyhow::Error;
 
     fn encode(
         &mut self,
-        item: (kaze::Hdr, Bytes),
+        item: (proto::Hdr, Bytes),
         dst: &mut BytesMut,
     ) -> Result<(), Self::Error> {
         let (hdr, data) = item;
@@ -70,41 +74,15 @@ impl Encoder<(kaze::Hdr, Bytes)> for NetPacketCodec {
     }
 }
 
-pub struct NetPacketForwardCodec {}
-
-impl Decoder for NetPacketForwardCodec {
-    type Item = BytesMut;
-    type Error = anyhow::Error;
-
-    fn decode(
-        &mut self,
-        src: &mut BytesMut,
-    ) -> Result<Option<Self::Item>, Self::Error> {
-        let mut reader = BufAdaptor::new(&src);
-        if reader.remaining() < size_of::<u32>() * 2 {
-            src.reserve(size_of::<u32>() * 2);
-            return Ok(None);
-        }
-        let size = reader.get_u32_le() as usize;
-        if size < size_of::<u32>() + reader.remaining() {
-            src.reserve(size);
-            return Ok(None);
-        }
-        src.advance(size_of::<u32>());
-        let data = src.split_to(size);
-        Ok(Some(data))
-    }
-}
-
 /// Decode a packet
 ///
 /// layouyt:
-/// [hdr_size(4)][hdr][body]
+/// `[hdr_size(4)][hdr][body]`
+///
+/// the hdr will decoded and returned, remaining data in src is the body of
+/// packet.
 #[tracing::instrument(skip(src))]
-pub fn decode_packet<'a>(src: &mut kaze_core::Bytes) -> Result<kaze::Hdr> {
-    // A KazeBytes should only be used once, it contains only one packet
-    assert!(src.pos() == 0);
-
+pub fn decode_packet<'a>(mut src: impl Buf) -> Result<proto::Hdr> {
     if src.remaining() < size_of::<u32>() {
         bail!("No rooms for packet prefix, remaining={}", src.remaining());
     }
@@ -117,7 +95,7 @@ pub fn decode_packet<'a>(src: &mut kaze_core::Bytes) -> Result<kaze::Hdr> {
         );
     }
     let buf = src.take(hdr_size);
-    Ok(kaze::Hdr::decode(buf).context("Failed to decode Hdr")?)
+    Ok(proto::Hdr::decode(buf).context("Failed to decode Hdr")?)
 }
 
 /// Encode a packet to a KazeBytesMut, KazeBytesMut created from KazeState,
@@ -125,12 +103,11 @@ pub fn decode_packet<'a>(src: &mut kaze_core::Bytes) -> Result<kaze::Hdr> {
 ///
 /// layouyt:
 /// [hdr_size(4)][hdr][body]
-#[allow(dead_code)]
 pub fn encode_packet(
-    src: &mut kaze_core::BytesMut,
-    item: (kaze::Hdr, impl Buf),
+    mut src: impl BufMut,
+    hdr: &proto::Hdr,
+    data: impl Buf,
 ) -> Result<(), Error> {
-    let (hdr, data) = item;
     let hdr_size = hdr.encoded_len();
     if hdr_size > src.remaining_mut() {
         return Err(Error::new(
@@ -139,23 +116,49 @@ pub fn encode_packet(
         ));
     }
     src.put_u32_le(hdr_size as u32);
-    hdr.encode(src)?;
+    hdr.encode(&mut src)?;
     src.put(data);
     Ok(())
 }
 
-struct BufAdaptor<T> {
+/// A wrapper for other buffer. giving a pos that can rewind.
+///
+/// It can be used to indicate the decoded position of a buffer, and If needed,
+/// rewind to its begining to retrieve the original buffer.
+#[derive(Clone)]
+pub struct BufWrapper<T> {
     inner: T,
     pos: usize,
 }
 
-impl<T> BufAdaptor<T> {
-    fn new(inner: T) -> BufAdaptor<T> {
-        BufAdaptor { inner, pos: 0 }
+impl<T> BufWrapper<T> {
+    /// Create a new BufWrapper
+    pub fn new(inner: T) -> BufWrapper<T> {
+        BufWrapper { inner, pos: 0 }
+    }
+
+    /// Rewind the buffer
+    pub fn rewind(&mut self) {
+        self.pos = 0
+    }
+
+    /// Get the inner buffer
+    pub fn as_inner(&self) -> &T {
+        &self.inner
+    }
+
+    /// Get the inner buffer mut
+    pub fn as_inner_mut(&mut self) -> &mut T {
+        &mut self.inner
+    }
+
+    /// Convert the inner buffer
+    pub fn into_inner(self) -> T {
+        self.inner
     }
 }
 
-impl<T: AsRef<[u8]>> Buf for BufAdaptor<T> {
+impl<T: AsRef<[u8]>> Buf for BufWrapper<T> {
     fn remaining(&self) -> usize {
         self.inner.as_ref().len() - self.pos
     }

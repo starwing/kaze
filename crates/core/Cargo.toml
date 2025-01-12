@@ -8,5 +8,4 @@ build = "build.rs"
 cc = "1.0"
 
 [dependencies]
-libc = "0.2"
 bytes = "1.9.0"

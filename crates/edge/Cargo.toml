@@ -18,6 +18,3 @@ path = "../clap_merge"
 
 [dependencies.kaze-core]
 path = "../core"
-
-[dependencies.kaze-utils]
-path = "../utils"

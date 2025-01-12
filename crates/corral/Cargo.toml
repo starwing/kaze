@@ -12,7 +12,7 @@ tokio = "1.43.0"
 serde = { version = "1.0.217", features = ["derive"] }
 metrics = "0.24.1"
 tracing = "0.1.41"
-tokio-util = "0.7.13"
+tokio-util = { version = "0.7.13", features = ["time"] }
 rand = "0.8.5"
 tokio-stream = "0.1.17"
 
@@ -21,9 +21,6 @@ path = "../clap_merge"
 
 [dependencies.kaze-utils]
 path = "../utils"
-
-[dependencies.kaze-core]
-path = "../core"
 
 [dependencies.kaze-resolver]
 path = "../resolver"
