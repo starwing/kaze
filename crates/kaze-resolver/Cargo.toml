@@ -1,0 +1,28 @@
+[package]
+name = "kaze-resolver"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = "4.5.26"
+serde = "1.0.217"
+tokio = "1.43.0"
+moka = { version = "0.12.8", features = ["future"] }
+tracing = "0.1.41"
+tower = { version = "0.5.2", features = ["util"] }
+anyhow = "1.0.95"
+papaya = "0.1.8"
+pin-project-lite = "0.2.16"
+rand = "0.8.5"
+
+[dependencies.clap-merge]
+path = "../clap-merge"
+
+[dependencies.kaze-core]
+path = "../kaze-core"
+
+[dependencies.kaze-util]
+path = "../kaze-util"
+
+[dependencies.kaze-protocol]
+path = "../kaze-protocol"

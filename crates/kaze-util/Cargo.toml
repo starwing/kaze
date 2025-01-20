@@ -1,0 +1,30 @@
+[package]
+name = "kaze-util"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.43.0", features = ["sync", "macros", "rt"] }
+tokio-util = { version = "0.7.13", features = ["time"] }
+anyhow = "1.0.95"
+duration-string = { version = "0.5.2", features = ["serde"] }
+futures = "0.3.31"
+papaya = "0.1.8"
+parking_lot = "0.12.3"
+pin-project = "1.1.8"
+tower = { version = "0.5.2", features = ["util"] }
+tracing = "0.1.41"
+metrics = "0.24.1"
+clap = { version = "4.5.26", features = ["derive"] }
+serde = "1.0.217"
+leaky-bucket = "1.1.2"
+thingbuf = "0.1.6"
+
+[dependencies.clap-merge]
+path = "../clap-merge"
+
+[dependencies.kaze-protocol]
+path = "../kaze-protocol"
+
+[dev-dependencies]
+tokio = { version = "1.43.0", features = ["macros", "time", "rt-multi-thread"] }

@@ -1,0 +1,22 @@
+[package]
+name = "kaze-protocol"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[dependencies]
+anyhow = "1.0.95"
+lockfree-object-pool = "0.1.6"
+prost = "0.13.4"
+tokio-util = { version = "0.7.13", features = ["codec"] }
+tracing = "0.1.41"
+futures = "0.3.31"
+
+[dependencies.kaze-core]
+path = "../kaze-core"
+
+[build-dependencies]
+prost-build = "0.13.4"
+
+[dev-dependencies]
+tokio = { version = "1.43.0", features = ["rt-multi-thread", "time", "macros"] }

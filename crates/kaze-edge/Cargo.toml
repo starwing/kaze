@@ -1,0 +1,29 @@
+[package]
+name = "kaze-edge"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.5.26", features = ["derive"] }
+serde = { version = "1.0.217", features = ["derive"] }
+anyhow = "1.0.95"
+metrics = "0.24.1"
+tokio = { version = "1.43.0", features = ["rt-multi-thread"] }
+tracing = "0.1.41"
+page_size = "0.6.0"
+futures = "0.3.31"
+lockfree-object-pool = "0.1.6"
+tokio-util = "0.7.13"
+
+[dependencies.clap-merge]
+path = "../clap-merge"
+
+[dependencies.kaze-core]
+path = "../kaze-core"
+
+[dependencies.kaze-protocol]
+path = "../kaze-protocol"
+
+[dev-dependencies.tokio]
+version = "1.43.0"
+features = ["time", "macros", "rt-multi-thread"]

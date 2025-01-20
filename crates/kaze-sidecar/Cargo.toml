@@ -1,0 +1,48 @@
+[package]
+name = "kaze_sidecar"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { version = "1.0.95", features = ["backtrace"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+tracing-appender = "0.2.3"
+bugreport = "0.5.0"
+metrics = "0.24.1"
+serde = "1.0.216"
+toml = "0.8.19"
+
+[dependencies.clap-merge]
+path = "../clap-merge"
+
+[dependencies.kaze-util]
+path = "../kaze-util"
+
+[dependencies.kaze-edge]
+path = "../kaze-edge"
+
+[dependencies.kaze-corral]
+path = "../kaze-corral"
+
+[dependencies.kaze-resolver]
+path = "../kaze-resolver"
+
+[dependencies.tokio]
+version = "1.42.0"
+features = ["full"]
+
+[dependencies.clap]
+version = "4.5.23"
+features = ["cargo", "derive", "string"]
+
+[dependencies.metrics-exporter-prometheus]
+version = "0.16.0"
+features = ["http-listener", "push-gateway", "tokio", "tracing"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

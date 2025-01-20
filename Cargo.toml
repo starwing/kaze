@@ -1,13 +1,17 @@
 [workspace]
 resolver = "2"
 members = [
-    "cli",
-    "crates/clap_merge",
-    "crates/clap_merge/clap_merge_derive",
-    "crates/core",
-    "crates/corral", "crates/edge",
-    "crates/protocol",
-    "crates/resolver", "crates/utils",
+    "crates/clap-merge",
+    "crates/clap-merge-derive",
+    "crates/kaze-core",
+    "crates/kaze-corral",
+    "crates/kaze-edge",
+    "crates/kaze-host",
+    "crates/kaze-protocol",
+    "crates/kaze-resolver",
+    "crates/kaze-resolver-consul",
+    "crates/kaze-sidecar",
+    "crates/kaze-sidecar-plugin",
+    "crates/kaze-util",
     "sidecar",
-    "utils",
 ]
