@@ -1,9 +1,7 @@
 use clap::Args;
 use clap_merge::ClapMerge;
-use futures::Sink;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tokio_util::codec::{Decoder, Encoder};
 
 use kaze_util::duration::{parse_duration, DurationString};
 
@@ -37,11 +35,7 @@ impl Options {
         self,
         sink: S,
         codec: Codec,
-    ) -> Corral<Item, Codec, S>
-    where
-        S: Sink<Item> + Send + 'static,
-        Codec: Decoder<Item = Item> + Encoder<Item> + Send + 'static,
-    {
+    ) -> Corral<Item, Codec, S> {
         Corral::new(self, codec, sink)
     }
 }

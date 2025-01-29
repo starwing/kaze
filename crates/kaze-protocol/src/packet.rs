@@ -29,8 +29,8 @@ pub fn new_bytes_pool() -> BytesPool {
     ))
 }
 
-#[derive(Debug)]
 /// the Packet object can be used in anywhere
+#[derive(Debug)]
 pub struct Packet {
     hdr_dirty: bool,
     hdr: Hdr,

@@ -14,6 +14,7 @@ use tokio::{
 };
 use tokio_util::time::delay_queue::Expired;
 use tokio_util::time::{delay_queue::Key, DelayQueue};
+use tower::ServiceExt;
 use tower::{
     layer::{layer_fn, util::Stack},
     service_fn, Layer, Service,
@@ -24,7 +25,6 @@ use kaze_protocol::{
     message::{Destination, Message, Source},
     packet::Packet,
     proto::{hdr, Hdr, RetCode},
-    sink::Sink,
 };
 
 /// RpcTracker is a service that tracks rpc info.
@@ -57,9 +57,10 @@ impl Recycle<Action> for ActionRecycler {
 
 impl<S> RpcTracker<S>
 where
-    S: Sink<Message> + Unpin + Send + Sync + 'static,
-    <S as Sink<Message>>::Future: Sync + Send + 'static,
-    <S as Sink<Message>>::Error: AsRef<dyn StdError> + Sync + Send + 'static,
+    S: Service<Message> + Unpin + Send + Sync + 'static,
+    <S as Service<Message>>::Future: Sync + Send + 'static,
+    <S as Service<Message>>::Error:
+        AsRef<dyn StdError> + Sync + Send + 'static,
 {
     pub fn new(capacity: usize, sink: S, notify: Notify) -> Arc<Self> {
         let (tx, rx) = thingbuf::mpsc::with_recycle(capacity, ActionRecycler);
@@ -123,7 +124,16 @@ where
                 rpc_info.to.clone(),
             )
         };
-        if let Err(e) = self.sink.lock().await.send(msg).await {
+        let mut guard = self.sink.lock().await;
+        let sink = match guard.ready().await {
+            Ok(sink) => sink,
+            Err(e) => {
+                counter!("kaze_send_timeout_errors_total").increment(1);
+                error!(error = %e.as_ref(), "Error when wait for sink ready");
+                return;
+            }
+        };
+        if let Err(e) = sink.call(msg).await {
             counter!("kaze_send_timeout_errors_total").increment(1);
             error!(error = %e.as_ref(), "Error sending timeout response");
         }
@@ -200,13 +210,12 @@ struct Info {
 mod tests {
     use super::*;
     use hdr::RpcType;
-    use kaze_protocol::sink::sink_fn;
 
     #[tokio::test]
     async fn test_rpc_tracker() {
         let notify = Arc::new(Notify::new());
         let ntf_clone = notify.clone();
-        let sink = sink_fn(move |m: Message| {
+        let sink = service_fn(move |m: Message| {
             let ntf_clone = ntf_clone.clone();
             async move {
                 println!("message: {:?}", m);

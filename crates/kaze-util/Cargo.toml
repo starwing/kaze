@@ -19,6 +19,7 @@ clap = { version = "4.5.26", features = ["derive"] }
 serde = "1.0.217"
 leaky-bucket = "1.1.2"
 thingbuf = "0.1.6"
+pin-project-lite = "0.2.16"
 
 [dependencies.clap-merge]
 path = "../clap-merge"
@@ -27,4 +28,10 @@ path = "../clap-merge"
 path = "../kaze-protocol"
 
 [dev-dependencies]
-tokio = { version = "1.43.0", features = ["macros", "time", "rt-multi-thread"] }
+tokio = { version = "1.43.0", features = [
+    "macros",
+    "time",
+    "io-util",
+    "rt-multi-thread",
+] }
+futures-test = "0.3.31"

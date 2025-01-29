@@ -4,6 +4,7 @@ use anyhow::{bail, Context, Result};
 use lockfree_object_pool::LinearObjectPool;
 use metrics::counter;
 use tokio::{sync::Mutex, task::block_in_place};
+use tower::{service_fn, Service};
 use tracing::{error, info, warn};
 
 use kaze_core::{self, KazeState};
@@ -11,7 +12,6 @@ use kaze_protocol::{
     bytes::{Buf, BufMut, BytesMut},
     codec::BufWrapper,
     message::Message,
-    sink::{sink_fn, Sink},
 };
 
 pub struct Edge {
@@ -211,11 +211,11 @@ impl Sender {
         Ok(())
     }
 
-    pub fn sink(
+    pub fn service(
         self,
         pool: Arc<LinearObjectPool<BufWrapper<BytesMut>>>,
-    ) -> impl Sink<Message> {
-        sink_fn(move |item: Message| {
+    ) -> impl Service<Message, Response = ()> {
+        service_fn(move |item: Message| {
             let self_ref = self.clone();
             let pool_ref = pool.clone();
             async move { self_ref.send_buf(item.packet().as_buf(&pool_ref)).await }

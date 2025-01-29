@@ -11,9 +11,8 @@ metrics = "0.24.1"
 tokio = { version = "1.43.0", features = ["rt-multi-thread"] }
 tracing = "0.1.41"
 page_size = "0.6.0"
-futures = "0.3.31"
 lockfree-object-pool = "0.1.6"
-tokio-util = "0.7.13"
+tower = "0.5.2"
 
 [dependencies.clap-merge]
 path = "../clap-merge"

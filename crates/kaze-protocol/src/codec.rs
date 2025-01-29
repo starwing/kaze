@@ -3,11 +3,14 @@ use std::io::{Error, ErrorKind};
 use anyhow::{bail, Context, Result};
 use prost::Message;
 use tokio_util::{
-    bytes::{Buf, BufMut, Bytes, BytesMut},
+    bytes::{Buf, BufMut, BytesMut},
     codec::{Decoder, Encoder},
 };
 
-use crate::{packet::Packet, proto};
+use crate::{
+    packet::{BytesPool, Packet},
+    proto,
+};
 
 /// Network packet codec
 ///
@@ -60,22 +63,19 @@ impl<'a> Decoder for NetPacketCodec {
     }
 }
 
-impl Encoder<(proto::Hdr, Bytes)> for NetPacketCodec {
+impl Encoder<(Packet, BytesPool)> for NetPacketCodec {
     type Error = anyhow::Error;
 
     fn encode(
         &mut self,
-        item: (proto::Hdr, Bytes),
+        item: (Packet, BytesPool),
         dst: &mut BytesMut,
     ) -> Result<(), Self::Error> {
-        let (hdr, data) = item;
-        dst.reserve(size_of::<u32>() * 2);
-        let hdr_size = hdr.encoded_len();
-        dst.put_u32_le((hdr_size + data.remaining()) as u32);
-        dst.put_u32_le(hdr_size as u32);
-        dst.reserve(hdr_size);
-        hdr.encode(dst)?;
-        dst.put_slice(data.chunk());
+        let (packet, pool) = item;
+        let mut buf = packet.as_buf(&pool);
+        dst.reserve(size_of::<u32>() + buf.remaining());
+        dst.put_u32_le(buf.remaining() as u32);
+        dst.put(&mut buf);
         Ok(())
     }
 }

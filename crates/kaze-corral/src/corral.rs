@@ -1,31 +1,32 @@
-use {
-    anyhow::{bail, Context, Error, Result},
-    futures::{Sink, SinkExt, StreamExt},
-    lru::LruCache,
-    metrics::{counter, gauge},
-    pin_project_lite::pin_project,
-    std::{
-        error::Error as StdError, net::SocketAddr, num::NonZeroUsize,
-        sync::Arc, time::Duration,
+use std::error::Error as StdError;
+use std::net::SocketAddr;
+use std::num::NonZeroUsize;
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::{bail, Context as _, Error, Result};
+use kaze_util::sink_service::SinkService;
+use lru::LruCache;
+use metrics::{counter, gauge};
+use tokio::{
+    net::{
+        tcp::{OwnedReadHalf, OwnedWriteHalf},
+        TcpStream,
     },
-    tokio::{
-        net::{
-            tcp::{OwnedReadHalf, OwnedWriteHalf},
-            TcpStream,
-        },
-        select,
-        sync::{Mutex, Notify},
-        task::JoinSet,
-    },
-    tokio_util::codec::{Decoder, Encoder, FramedRead, FramedWrite},
-    tracing::{error, instrument},
+    select,
+    sync::{Mutex, Notify},
+    task::JoinSet,
 };
+use tokio_stream::StreamExt;
+use tokio_util::codec::{Decoder, Encoder, FramedRead, FramedWrite};
+use tower::{Service, ServiceExt};
+use tracing::{error, instrument};
 
 use kaze_util::singleflight::Group;
 
 use super::options::Options;
 
-type ConnValue<T, E> = Arc<Mutex<ConnSink<T, E>>>;
+type ConnValue<T, E> = SinkService<FramedWrite<OwnedWriteHalf, E>, T>;
 
 pub struct Corral<Item, Codec, S> {
     options: Options,
@@ -36,6 +37,9 @@ pub struct Corral<Item, Codec, S> {
     join_set: Mutex<JoinSet<()>>,
     exit: Notify,
 }
+
+unsafe impl<Item, Codec, S> Send for Corral<Item, Codec, S> where S: Send {}
+unsafe impl<Item, Codec, S> Sync for Corral<Item, Codec, S> where S: Sync {}
 
 impl<Item, Codec, S> Corral<Item, Codec, S> {
     pub fn new(options: Options, codec: Codec, sink: S) -> Self {
@@ -116,9 +120,11 @@ where
     Item: Send + 'static,
     Codec:
         Encoder<Item> + Decoder<Item = Item> + Clone + Sync + Send + 'static,
-    S: Sink<ItemWithAddr<Item>> + Clone + Send + Sync + Unpin + 'static,
     <Codec as Decoder>::Error: StdError + Sync + Send + 'static,
-    <S as Sink<ItemWithAddr<Item>>>::Error: StdError + Sync + Send + 'static,
+    S: Service<ItemWithAddr<Item>> + Clone + Send + Sync + Unpin + 'static,
+    <S as Service<ItemWithAddr<Item>>>::Future: Send + 'static,
+    <S as Service<ItemWithAddr<Item>>>::Error:
+        StdError + Sync + Send + 'static,
 {
     pub async fn find_or_connect(
         self: &Arc<Self>,
@@ -174,61 +180,10 @@ where
         self.join_set.lock().await.spawn(fut);
         gauge!("kaze_connections_total").increment(1);
 
-        let conn = Arc::new(Mutex::new(ConnSink::new(
-            write_half,
-            self.codec.clone(),
-        )));
+        let conn =
+            SinkService::new(FramedWrite::new(write_half, self.codec.clone()));
         self.sock_map.lock().await.put(addr, conn.clone());
         Ok(conn)
-    }
-}
-
-pin_project! {
-    pub struct ConnSink<Item, E> {
-        #[pin]
-        inner: FramedWrite<OwnedWriteHalf, E>,
-        _marker: std::marker::PhantomData<Item>,
-    }
-}
-
-impl<Item, E: Encoder<Item>> ConnSink<Item, E> {
-    pub fn new(conn: OwnedWriteHalf, encoder: E) -> Self {
-        Self {
-            inner: FramedWrite::new(conn, encoder),
-            _marker: std::marker::PhantomData,
-        }
-    }
-}
-
-impl<Item, E: Encoder<Item>> Sink<Item> for ConnSink<Item, E> {
-    type Error = E::Error;
-
-    fn poll_ready(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::result::Result<(), Self::Error>> {
-        self.project().inner.poll_ready(cx)
-    }
-
-    fn start_send(
-        self: std::pin::Pin<&mut Self>,
-        item: Item,
-    ) -> std::result::Result<(), Self::Error> {
-        self.project().inner.start_send(item)
-    }
-
-    fn poll_flush(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::result::Result<(), Self::Error>> {
-        self.project().inner.poll_flush(cx)
-    }
-
-    fn poll_close(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::result::Result<(), Self::Error>> {
-        self.project().inner.poll_close(cx)
     }
 }
 
@@ -267,9 +222,10 @@ impl<Item, D, S> ConnSource<Item, D, S>
 where
     Item: Send + 'static,
     D: Decoder<Item = Item> + Encoder<Item> + Send + 'static,
-    S: Sink<ItemWithAddr<Item>> + Unpin + Clone,
+    S: Service<ItemWithAddr<Item>> + Unpin + Clone,
     <D as Decoder>::Error: StdError + Sync + Send + 'static,
-    <S as Sink<ItemWithAddr<Item>>>::Error: StdError + Sync + Send + 'static,
+    <S as Service<ItemWithAddr<Item>>>::Error:
+        StdError + Sync + Send + 'static,
 {
     #[instrument(level = "trace", skip(self))]
     async fn main_loop(self, pending: Option<Duration>) {
@@ -299,12 +255,11 @@ where
                 counter!("kaze_read_closed_total").increment(1);
                 return Ok(());
             };
-            sink.send((
-                pkg.context("Failed to read packet")?,
-                Some(self.addr),
-            ))
-            .await
-            .context("Failed to transfer packet")?;
+            sink.ready()
+                .await?
+                .call((pkg.context("Failed to read packet")?, Some(self.addr)))
+                .await
+                .context("Failed to transfer packet")?;
         }
         counter!("kaze_read_idle_timeout_total").increment(1);
         Ok(())
@@ -335,7 +290,9 @@ where
         self.corral
             .sink
             .clone()
-            .send((pkg.context("Failed to read packet")?, Some(self.addr)))
+            .ready()
+            .await?
+            .call((pkg.context("Failed to read packet")?, Some(self.addr)))
             .await
             .context("Failed to sink packet")?;
         return Ok(true);
