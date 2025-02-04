@@ -1,2 +1,5 @@
+mod options;
+
 pub mod corral;
-pub mod options;
+
+pub use options::Options;

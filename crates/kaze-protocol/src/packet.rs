@@ -343,7 +343,8 @@ mod tests {
         bytes.put(buf);
 
         let cursor = Cursor::new(bytes);
-        let mut framed = FramedRead::new(cursor, NetPacketCodec::new());
+        let codec = NetPacketCodec::new(new_bytes_pool());
+        let mut framed = FramedRead::new(cursor, codec);
         framed.next().await.unwrap().unwrap()
     }
 
@@ -409,7 +410,8 @@ mod tests {
 
         let cursor = std::io::Cursor::new(bytes);
 
-        let mut framed = FramedRead::new(cursor, NetPacketCodec::new());
+        let codec = NetPacketCodec::new(new_bytes_pool());
+        let mut framed = FramedRead::new(cursor, codec);
         let out = block_on(framed.next()).unwrap().unwrap();
 
         assert_eq!(packet.hdr, out.hdr);

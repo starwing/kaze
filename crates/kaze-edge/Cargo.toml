@@ -17,6 +17,9 @@ tower = "0.5.2"
 [dependencies.clap-merge]
 path = "../clap-merge"
 
+[dependencies.kaze-util]
+path = "../kaze-util"
+
 [dependencies.kaze-core]
 path = "../kaze-core"
 

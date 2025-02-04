@@ -1,5 +1,6 @@
 use clap::Args;
 use clap_merge::ClapMerge;
+use kaze_protocol::packet::BytesPool;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -31,12 +32,8 @@ pub struct Options {
 }
 
 impl Options {
-    pub fn build<Item, S, Codec>(
-        self,
-        sink: S,
-        codec: Codec,
-    ) -> Corral<Item, Codec, S> {
-        Corral::new(self, codec, sink)
+    pub fn build<Sink>(self, pool: BytesPool, sink: Sink) -> Corral<Sink> {
+        Corral::new(self, pool, sink)
     }
 }
 

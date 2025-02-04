@@ -1,2 +1,3 @@
-mod config;
-mod pipeline;
+pub mod config;
+pub mod pipeline;
+pub mod plugins;

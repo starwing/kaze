@@ -1,18 +1,19 @@
 use std::{borrow::Cow, net::Ipv4Addr, ptr::addr_of_mut, sync::Arc};
 
 use anyhow::{bail, Context, Result};
-use lockfree_object_pool::LinearObjectPool;
 use metrics::counter;
 use tokio::{sync::Mutex, task::block_in_place};
-use tower::{service_fn, Service};
+use tower::{layer::layer_fn, service_fn, Layer};
 use tracing::{error, info, warn};
 
 use kaze_core::{self, KazeState};
 use kaze_protocol::{
-    bytes::{Buf, BufMut, BytesMut},
-    codec::BufWrapper,
+    bytes::{Buf, BufMut},
     message::Message,
+    packet::BytesPool,
+    service::MessageService,
 };
+use kaze_util::tower_ext::ServiceExt as _;
 
 pub struct Edge {
     cq: KazeState, // completion queue
@@ -35,8 +36,8 @@ impl Edge {
     pub fn sq_name(&self) -> Cow<'_, str> {
         self.sq.name()
     }
-    pub fn split(self) -> (Receiver, Sender) {
-        (Receiver::new(self.cq), Sender::new(self.sq))
+    pub fn split(self) -> (Sender, Receiver) {
+        (Sender::new(self.sq), Receiver::new(self.cq))
     }
 
     pub(crate) fn new_kaze_pair(
@@ -211,14 +212,58 @@ impl Sender {
         Ok(())
     }
 
-    pub fn service(
-        self,
-        pool: Arc<LinearObjectPool<BufWrapper<BytesMut>>>,
-    ) -> impl Service<Message, Response = ()> {
+    pub fn service(self, pool: BytesPool) -> impl MessageService<()> {
         service_fn(move |item: Message| {
             let self_ref = self.clone();
             let pool_ref = pool.clone();
             async move { self_ref.send_buf(item.packet().as_buf(&pool_ref)).await }
         })
+    }
+
+    pub fn layer<S: MessageService<()>>(
+        self,
+        pool: BytesPool,
+    ) -> impl Layer<S, Service: MessageService<()>> {
+        let svc = self.service(pool);
+        layer_fn(move |inner: S| {
+            let svc = svc.clone();
+            service_fn(move |item: Message| {
+                let svc = svc.clone();
+                let inner = inner.clone();
+                async move {
+                    if item.destination().is_local() {
+                        return svc
+                            .clone()
+                            .ready_call(item)
+                            .await
+                            .context("send packet");
+                    }
+                    inner
+                        .clone()
+                        .ready_call(item)
+                        .await
+                        .context("failed to forward packet")
+                }
+            })
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kaze_protocol::{packet::new_bytes_pool, service::SinkMessage};
+    use tower::{Layer, ServiceExt};
+
+    use crate::Options;
+
+    #[test]
+    fn test_send() {
+        let edge = Options::default().build().unwrap();
+        let (tx, _rx) = edge.split();
+        let pool = new_bytes_pool();
+        tx.clone().service(pool.clone()).boxed();
+
+        let sink = SinkMessage::new();
+        tx.clone().layer(pool).layer(sink).boxed();
     }
 }

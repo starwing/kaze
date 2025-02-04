@@ -21,15 +21,16 @@ use crate::{
 /// After decode, the buffer will be split to (hdr, data)
 /// which the data contains [hdr_size(4)][hdr][body] for forwarding to proto
 /// queue without encode again.
-pub struct NetPacketCodec {}
+#[derive(Clone, Copy)]
+pub struct NetPacketDecoder {}
 
-impl<'a> NetPacketCodec {
+impl<'a> NetPacketDecoder {
     pub fn new() -> Self {
-        NetPacketCodec {}
+        NetPacketDecoder {}
     }
 }
 
-impl<'a> Decoder for NetPacketCodec {
+impl<'a> Decoder for NetPacketDecoder {
     type Item = Packet;
     type Error = anyhow::Error;
 
@@ -63,16 +64,48 @@ impl<'a> Decoder for NetPacketCodec {
     }
 }
 
-impl Encoder<(Packet, BytesPool)> for NetPacketCodec {
+#[derive(Clone)]
+pub struct NetPacketCodec {
+    decoder: NetPacketDecoder,
+    pool: BytesPool,
+}
+
+impl NetPacketCodec {
+    pub fn new(pool: BytesPool) -> Self {
+        NetPacketCodec {
+            decoder: NetPacketDecoder::new(),
+            pool,
+        }
+    }
+
+    pub fn pool(&self) -> &BytesPool {
+        &self.pool
+    }
+}
+
+impl Decoder for NetPacketCodec {
+    type Item = Packet;
     type Error = anyhow::Error;
 
+    #[tracing::instrument(skip(self, src))]
+    fn decode(
+        &mut self,
+        src: &mut BytesMut,
+    ) -> std::result::Result<Option<Self::Item>, Self::Error> {
+        self.decoder.decode(src)
+    }
+}
+
+impl Encoder<Packet> for NetPacketCodec {
+    type Error = anyhow::Error;
+
+    #[tracing::instrument(skip(self, dst))]
     fn encode(
         &mut self,
-        item: (Packet, BytesPool),
+        item: Packet,
         dst: &mut BytesMut,
     ) -> Result<(), Self::Error> {
-        let (packet, pool) = item;
-        let mut buf = packet.as_buf(&pool);
+        let mut buf = item.as_buf(&self.pool);
         dst.reserve(size_of::<u32>() + buf.remaining());
         dst.put_u32_le(buf.remaining() as u32);
         dst.put(&mut buf);

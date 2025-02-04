@@ -21,6 +21,9 @@ path = "../clap-merge"
 [dependencies.kaze-util]
 path = "../kaze-util"
 
+[dependencies.kaze-protocol]
+path = "../kaze-protocol"
+
 [dev-dependencies.tokio]
 version = "1.43.0"
 features = ["macros", "io-util"]

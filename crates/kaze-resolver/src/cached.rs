@@ -53,8 +53,8 @@ impl<R: Resolver> Resolver for Cached<R> {
 
     async fn visit_nodes(
         &self,
-        idents: impl Iterator<Item = u32> + Clone,
-        mut f: impl FnMut(u32, SocketAddr),
+        idents: impl Iterator<Item = u32> + Clone + Send,
+        mut f: impl FnMut(u32, SocketAddr) + Send,
     ) {
         self.resolver.visit_nodes(idents, &mut f).await
     }
@@ -63,7 +63,7 @@ impl<R: Resolver> Resolver for Cached<R> {
         &self,
         ident: u32,
         mask: u32,
-        mut f: impl FnMut(u32, SocketAddr),
+        mut f: impl FnMut(u32, SocketAddr) + Send,
     ) {
         self.mask_cache
             .get_with((ident, mask), self.calc_mask_nodes(ident, mask))

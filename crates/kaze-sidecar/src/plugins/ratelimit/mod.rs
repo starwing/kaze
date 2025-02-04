@@ -1,60 +1,13 @@
-use clap::Args;
-use clap_merge::ClapMerge;
-use kaze_protocol::message::Message;
+mod options;
+
 use leaky_bucket::RateLimiter;
-use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, net::Ipv4Addr, str::FromStr, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
-use tower::{
-    layer::{layer_fn, util::Stack},
-    service_fn, Layer, Service,
-};
+use tower::{service_fn, Service};
 
-use super::duration::{parse_duration, DurationString};
+use kaze_protocol::message::Message;
 
-#[derive(ClapMerge, Args, Serialize, Deserialize, Clone, Debug)]
-#[command(next_help_heading = "Rate limit configurations")]
-#[group(id = "RateLimitOptions")]
-pub struct Options {
-    /// max requests per duration
-    #[arg(long = "total-max", value_name = "N")]
-    pub max: Option<usize>,
-
-    /// initial requests when initialized
-    #[arg(long = "total-initial", value_name = "N", default_value_t = 0)]
-    pub initial: usize,
-
-    /// refill requests count per duration
-    #[arg(long = "total-refill", value_name = "N", default_value_t = 0)]
-    pub refill: usize,
-
-    /// refill interval
-    #[serde(default = "default_interval")]
-    #[arg(id = "rate_limit_interval", long = "total-interval")]
-    #[arg(value_parser = parse_duration, default_value_t = default_interval())]
-    #[arg(value_name = "DURATION")]
-    pub interval: DurationString,
-
-    #[arg(skip)]
-    pub per_msg: Vec<PerMsgLimitInfo>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct PerMsgLimitInfo {
-    pub ident: Option<Ipv4Addr>,
-    pub body_type: Option<String>,
-
-    pub max: usize,
-    pub initial: usize,
-    pub refill: usize,
-
-    #[serde(default = "default_interval")]
-    pub interval: DurationString,
-}
-
-fn default_interval() -> DurationString {
-    DurationString::from_str("100ms").unwrap()
-}
+pub use options::Options;
 
 pub struct RateLimit {
     total: Option<RateLimiter>,
@@ -62,7 +15,7 @@ pub struct RateLimit {
 }
 
 impl RateLimit {
-    pub fn new(conf: &Options) -> Self {
+    fn new(conf: &Options) -> Self {
         Self {
             total: conf.max.map(|max| {
                 let initial =
@@ -119,15 +72,15 @@ impl RateLimit {
 }
 
 impl RateLimit {
-    pub fn service(self: Arc<Self>) -> impl Service<Message> {
+    pub fn service(
+        self: Arc<Self>,
+    ) -> impl Service<
+        Message,
+        Response = Message,
+        Error = anyhow::Error,
+        Future: Send,
+    > + Clone {
         service_fn(move |req: Message| self.clone().handle_request(req))
-    }
-
-    pub fn layer<S>(self: Arc<Self>) -> impl Layer<S> {
-        layer_fn(move |inner: S| {
-            let svc = self.clone().service();
-            Stack::new(svc, inner)
-        })
     }
 
     async fn handle_request(
@@ -146,3 +99,16 @@ impl RateLimit {
 
 #[derive(Hash, Eq, PartialEq)]
 struct LimitKey(Option<u32>, Option<String>);
+
+#[cfg(test)]
+mod tests {
+    use tower::ServiceExt as _;
+
+    use super::*;
+
+    #[test]
+    fn test_send() {
+        let rl = Options::default().build();
+        rl.service().boxed();
+    }
+}

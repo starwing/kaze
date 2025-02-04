@@ -1,28 +1,22 @@
-use std::net::SocketAddr;
-
 use rand::Rng;
-use tower::{
-    layer::{layer_fn, util::Stack},
-    service_fn, Layer, Service,
-};
+use tower::service_fn;
 use tracing::error;
 
 use kaze_protocol::{
     message::{Destination, Message, Node},
-    packet::Packet,
     proto::hdr::{DstMask, DstMulticast, RouteType},
+    service::MessageService,
 };
 
 use crate::{local::local_node, Resolver};
 
-pub fn dispatch_service<R>(
-    resolver: &R,
-) -> impl Service<(Packet, Option<SocketAddr>), Response = Message> + use<'_, R>
+pub fn dispatch_service<R>(resolver: R) -> impl MessageService<Message>
 where
-    R: Resolver,
+    R: Resolver + Clone,
 {
-    service_fn(move |req: (Packet, Option<SocketAddr>)| {
-        let route_type = req.0.hdr().route_type.clone();
+    service_fn(move |req: Message| {
+        let route_type = req.packet().hdr().route_type.clone();
+        let resolver = resolver.clone();
         let dispatch = dispatch(route_type, resolver);
         async move {
             let mut msg: Message = req.into();
@@ -37,20 +31,9 @@ where
     })
 }
 
-pub fn dispatch_layer<R, T>(resolver: &R) -> impl Layer<T> + use<'_, R, T>
-where
-    R: Resolver,
-    T: Service<Message>,
-{
-    layer_fn(move |inner: T| {
-        let svc = dispatch_service(resolver);
-        Stack::new(svc, inner)
-    })
-}
-
 async fn dispatch(
     route_type: Option<RouteType>,
-    resolver: &impl Resolver,
+    resolver: impl Resolver,
 ) -> Option<Destination> {
     let Some(route_type) = route_type else {
         return None;
@@ -59,15 +42,15 @@ async fn dispatch(
         RouteType::DstIdent(ident) if ident == local_node().ident => {
             Some(Destination::Host)
         }
-        RouteType::DstIdent(ident) => dispatch_ident(resolver, ident).await,
+        RouteType::DstIdent(ident) => dispatch_ident(&resolver, ident).await,
         RouteType::DstRandom(DstMask { ident, mask }) => {
-            dispatch_random(resolver, ident, mask).await
+            dispatch_random(&resolver, ident, mask).await
         }
         RouteType::DstBroadcast(DstMask { ident, mask }) => {
-            dispatch_broadcast(resolver, ident, mask).await
+            dispatch_broadcast(&resolver, ident, mask).await
         }
         RouteType::DstMulticast(DstMulticast { dst_idents }) => {
-            dispatch_multicast(resolver, dst_idents.iter().cloned()).await
+            dispatch_multicast(&resolver, dst_idents.iter().cloned()).await
         }
     }
 }
@@ -87,12 +70,11 @@ async fn dispatch_random(
     ident: u32,
     mask: u32,
 ) -> Option<Destination> {
-    let mut rng = rand::thread_rng();
     let mut result = None;
     let mut cnt = 1;
     resolver
         .visit_masked_nodes(ident, mask, |ident, addr| {
-            if rng.gen_ratio(1, cnt) {
+            if rand::thread_rng().gen_ratio(1, cnt) {
                 result = Some(Node::new(ident, addr));
             }
             cnt += 1;
@@ -117,7 +99,7 @@ async fn dispatch_broadcast(
 
 async fn dispatch_multicast(
     resolver: &impl Resolver,
-    dst_idents: impl Iterator<Item = u32> + Clone,
+    dst_idents: impl Iterator<Item = u32> + Clone + Send,
 ) -> Option<Destination> {
     let mut vec = Vec::new();
     resolver
@@ -126,4 +108,21 @@ async fn dispatch_multicast(
         })
         .await;
     Some(Destination::NodeList(vec))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use tower::ServiceExt;
+
+    use crate::LocalOptions;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_send() {
+        let resolver = Arc::new(LocalOptions::default().build().await);
+        dispatch_service(resolver).boxed();
+    }
 }

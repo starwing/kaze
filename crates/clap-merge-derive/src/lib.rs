@@ -68,8 +68,8 @@ fn impl_merge(
                 if let Some(id) = id {
                     field_id = id;
                 }
-                skip_field = skip;
-                cur_default = def;
+                skip_field = skip_field || skip;
+                cur_default = def.or(cur_default);
             } else if attr.path().is_ident("command") {
                 // Parse nested attributes
                 let punctuated = attr.parse_args_with(

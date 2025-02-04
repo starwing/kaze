@@ -1,8 +1,7 @@
 use std::net::SocketAddr;
 
-use crate::{packet::Packet, proto::Hdr};
+use crate::packet::Packet;
 
-pub type HdrWithAddr = (Hdr, Option<SocketAddr>);
 pub type PacketWithAddr = (Packet, Option<SocketAddr>);
 
 /// response packet, A packet with a destination to send to
@@ -50,9 +49,35 @@ impl Message {
         }
     }
 
+    /// create a new response from PacketWithAddr and destination
+    pub fn from_split(packet: PacketWithAddr, dst: Destination) -> Self {
+        let (packet, addr) = packet;
+        let src = addr
+            .map(|a| Source::from_remote(packet.hdr().src_ident, a))
+            .unwrap_or(Source::Host);
+        Self {
+            packet,
+            source: src,
+            destination: dst,
+        }
+    }
+
     /// get the source
     pub fn source(&self) -> &Source {
         &self.source
+    }
+
+    /// convert message into raw packet
+    pub fn into_packet(self) -> Packet {
+        self.packet
+    }
+
+    pub fn split(self) -> (PacketWithAddr, Destination) {
+        let addr = match self.source {
+            Source::Host => None,
+            Source::Node(node) => Some(node.addr),
+        };
+        ((self.packet, addr), self.destination)
     }
 
     /// get the packet
@@ -129,7 +154,7 @@ impl Destination {
     }
 
     pub fn is_remote(&self) -> bool {
-        matches!(self, Self::Node(_))
+        matches!(self, Self::Node(_) | Self::NodeList(_))
     }
 }
 

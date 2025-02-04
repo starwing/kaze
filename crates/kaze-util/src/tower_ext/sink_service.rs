@@ -42,9 +42,10 @@ impl<S, Item> SinkService<S, Item> {
 
 impl<S, Item> Service<Item> for SinkService<S, Item>
 where
-    Item: Send + Unpin + 'static,
-    S: Sink<Item> + Send + Unpin + 'static,
-    <S as Sink<Item>>::Error: Into<anyhow::Error> + Send + Sync + 'static,
+    Item: Send,
+    S: Sink<Item, Error: Into<anyhow::Error> + Send + Sync + 'static>
+        + Sync
+        + Unpin,
 {
     type Response = ();
     type Error = anyhow::Error;
@@ -54,12 +55,11 @@ where
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<(), Self::Error>> {
-        match self
+        let mut inner = self
             .inner
             .lock()
-            .map_err(|e| anyhow::anyhow!("Failed to lock state: {e}"))?
-            .poll_ready_unpin(cx)
-        {
+            .map_err(|e| anyhow::anyhow!("Failed to lock state: {e}"))?;
+        match inner.poll_ready_unpin(cx) {
             Poll::Ready(res) => Poll::Ready(res.map_err(Into::into)),
             Poll::Pending => Poll::Pending,
         }
@@ -71,11 +71,11 @@ where
 }
 
 pin_project_lite::pin_project! {
-pub struct SendFuture<S: Sink<Item>, Item> {
-    #[pin]
-    inner: Arc<std::sync::Mutex<S>>,
-    item: Option<Item>,
-}
+    pub struct SendFuture<S: Sink<Item>, Item> {
+        #[pin]
+        inner: Arc<std::sync::Mutex<S>>,
+        item: Option<Item>,
+    }
 }
 
 impl<S: Sink<Item>, Item> SendFuture<S, Item> {
@@ -89,22 +89,23 @@ impl<S: Sink<Item>, Item> SendFuture<S, Item> {
 
 impl<S, Item> Future for SendFuture<S, Item>
 where
-    Item: Unpin,
-    S: Sink<Item> + Unpin,
-    <S as Sink<Item>>::Error: Into<anyhow::Error> + Send + Sync + 'static,
+    Item: Send,
+    S: Sink<Item, Error: Into<anyhow::Error> + Send + Sync + 'static>
+        + Sync
+        + Unpin,
 {
     type Output = Result<(), anyhow::Error>;
 
     fn poll(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Self::Output> {
-        let projected = self.project();
-        let mut guard = projected
+        let proj = self.as_mut().project();
+        let mut guard = proj
             .inner
             .lock()
             .map_err(|e| anyhow::anyhow!("Failed to lock state: {e}"))?;
-        if let Some(item) = projected.item.take() {
+        if let Some(item) = proj.item.take() {
             if let Err(err) = guard.start_send_unpin(item) {
                 return Poll::Ready(Err(err.into()));
             }
@@ -158,11 +159,12 @@ mod tests {
     #[tokio::test]
     async fn test_framed_backpressure() {
         let (tx, _rx) = tokio::io::duplex(1024);
-        let mut sink =
-            SinkService::new(FramedWrite::new(tx, NetPacketCodec::new()));
+        let mut sink = SinkService::new(FramedWrite::new(
+            tx,
+            NetPacketCodec::new(new_bytes_pool()),
+        ));
 
         // fill the buffer to full
-        let pool = new_bytes_pool();
         let mut cx = noop_context();
         loop {
             let r = Service::poll_ready(&mut sink, &mut cx);
@@ -170,7 +172,7 @@ mod tests {
             assert!(r.is_ready());
 
             let packet = Packet::from_hdr(Hdr::default());
-            match sink.call((packet, pool.clone())).poll_unpin(&mut cx) {
+            match sink.call(packet).poll_unpin(&mut cx) {
                 Poll::Ready(res) => {
                     assert!(res.is_ok());
                 }

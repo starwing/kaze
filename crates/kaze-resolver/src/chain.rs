@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use crate::Resolver;
 
 /// chain of multiple resolvers
-pub struct Chain<R1: Resolver, R2: Resolver> {
+pub struct Chain<R1: Resolver + Send, R2: Resolver + Send> {
     r1: R1,
     r2: R2,
 }
@@ -24,8 +24,8 @@ impl<R1: Resolver, R2: Resolver> Resolver for Chain<R1, R2> {
 
     async fn visit_nodes(
         &self,
-        idents: impl Iterator<Item = u32> + Clone,
-        mut f: impl FnMut(u32, SocketAddr),
+        idents: impl Iterator<Item = u32> + Clone + Send,
+        mut f: impl FnMut(u32, SocketAddr) + Send,
     ) {
         self.r1.visit_nodes(idents.clone(), &mut f).await;
         self.r2.visit_nodes(idents, &mut f).await;
@@ -35,7 +35,7 @@ impl<R1: Resolver, R2: Resolver> Resolver for Chain<R1, R2> {
         &self,
         ident: u32,
         mask: u32,
-        mut f: impl FnMut(u32, SocketAddr),
+        mut f: impl FnMut(u32, SocketAddr) + Send,
     ) {
         self.r1.visit_masked_nodes(ident, mask, &mut f).await;
         self.r2.visit_masked_nodes(ident, mask, &mut f).await;
