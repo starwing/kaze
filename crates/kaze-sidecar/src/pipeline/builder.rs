@@ -7,7 +7,7 @@ mod tests {
     use tokio::sync::Notify;
     use tower::{util::BoxCloneSyncService, ServiceBuilder};
 
-    use crate::plugins::{ratelimit, tracker::RpcTracker};
+    use crate::plugins::{corral, ratelimit, tracker::RpcTracker};
     use kaze_plugin::protocol::{
         packet::{new_bytes_pool, Packet},
         proto::Hdr,
@@ -37,8 +37,7 @@ mod tests {
         let resolver = Arc::new(kaze_resolver::local::Local::new());
         let ratelimit = ratelimit::Options::default().build();
 
-        let corral =
-            Arc::new(kaze_corral::Options::default().build(pool.clone()));
+        let corral = corral::Options::default().build(pool.clone());
 
         let tracker = RpcTracker::new(10, Notify::new());
 

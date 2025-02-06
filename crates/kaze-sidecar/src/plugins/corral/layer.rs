@@ -6,12 +6,13 @@ use tokio::io::AsyncWriteExt;
 use tower::{layer::layer_fn, service_fn, Layer};
 use tracing::error;
 
-use crate::corral::Corral;
 use kaze_plugin::protocol::{
     message::{Destination, Message, Node, PacketWithAddr},
     service::MessageService,
 };
 use kaze_plugin::util::tower_ext::ServiceExt as _;
+
+use super::Corral;
 
 impl Corral {
     pub fn layer<S>(

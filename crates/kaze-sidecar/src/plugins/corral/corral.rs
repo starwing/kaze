@@ -46,9 +46,9 @@ impl PipelineRequired for Corral {
 }
 
 impl Corral {
-    pub fn new(options: Options, pool: BytesPool) -> Self {
+    pub fn new(options: Options, pool: BytesPool) -> Arc<Self> {
         let limit = options.limit;
-        Self {
+        Arc::new(Self {
             options,
             decoder: NetPacketCodec::new(pool),
             sink: PipelineCell::new(),
@@ -61,7 +61,7 @@ impl Corral {
             ),
             join_set: Mutex::new(JoinSet::new()),
             exit: Notify::new(),
-        }
+        })
     }
 
     /// notify all tasks to exit

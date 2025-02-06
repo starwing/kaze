@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use kaze_plugin::clap::Args;
@@ -32,7 +33,7 @@ pub struct Options {
 }
 
 impl Options {
-    pub fn build(self, pool: BytesPool) -> Corral {
+    pub fn build(self, pool: BytesPool) -> Arc<Corral> {
         Corral::new(self, pool)
     }
 }

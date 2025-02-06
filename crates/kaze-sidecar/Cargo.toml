@@ -18,15 +18,14 @@ futures = "0.3.31"
 tokio-util = "0.7.13"
 thingbuf = "0.1.6"
 papaya = "0.1.8"
+lru = "0.13.0"
+tokio-stream = "0.1.17"
 
 [dependencies.kaze-plugin]
 path = "../kaze-plugin"
 
 [dependencies.kaze-edge]
 path = "../kaze-edge"
-
-[dependencies.kaze-corral]
-path = "../kaze-corral"
 
 [dependencies.kaze-resolver]
 path = "../kaze-resolver"

@@ -895,24 +895,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kaze-corral"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "futures",
- "kaze-plugin",
- "lru",
- "metrics",
- "serde",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tower",
- "tracing",
-]
-
-[[package]]
 name = "kaze-edge"
 version = "0.1.0"
 dependencies = [
@@ -1007,11 +989,11 @@ dependencies = [
  "bugreport",
  "clap",
  "futures",
- "kaze-corral",
  "kaze-edge",
  "kaze-plugin",
  "kaze-resolver",
  "leaky-bucket",
+ "lru",
  "metrics",
  "metrics-exporter-prometheus",
  "papaya",
@@ -1019,6 +1001,7 @@ dependencies = [
  "serde",
  "thingbuf",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "toml",
  "tower",

@@ -4,7 +4,6 @@ members = [
     "crates/clap-merge",
     "crates/clap-merge-derive",
     "crates/kaze-core",
-    "crates/kaze-corral",
     "crates/kaze-edge",
     "crates/kaze-host",
     "crates/kaze-plugin",
