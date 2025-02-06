@@ -3,10 +3,12 @@ use std::{
     time::Duration,
 };
 
-use clap::Args;
-use clap_merge::ClapMerge;
-use kaze_util::duration::{parse_duration, DurationString};
-use serde::{Deserialize, Serialize};
+use kaze_plugin::{
+    clap::Args,
+    clap_merge::ClapMerge,
+    serde::{Deserialize, Serialize},
+    util::duration::{parse_duration, DurationString},
+};
 
 use crate::{cached::Cached, local::Local, Resolver};
 

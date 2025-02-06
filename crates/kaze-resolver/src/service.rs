@@ -2,13 +2,14 @@ use rand::Rng;
 use tower::service_fn;
 use tracing::error;
 
-use kaze_protocol::{
+use kaze_plugin::local_node;
+use kaze_plugin::protocol::{
     message::{Destination, Message, Node},
     proto::hdr::{DstMask, DstMulticast, RouteType},
     service::MessageService,
 };
 
-use crate::{local::local_node, Resolver};
+use crate::Resolver;
 
 pub fn dispatch_service<R>(resolver: R) -> impl MessageService<Message>
 where

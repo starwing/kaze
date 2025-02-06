@@ -5,7 +5,6 @@ use kaze_plugin::clap_merge::ClapMerge;
 use kaze_plugin::protocol::packet::BytesPool;
 use kaze_plugin::serde::{Deserialize, Serialize};
 use kaze_plugin::util::duration::{parse_duration, DurationString};
-use kaze_plugin::PipelineCell;
 
 use super::corral::Corral;
 
@@ -33,8 +32,8 @@ pub struct Options {
 }
 
 impl Options {
-    pub fn build(self, pool: BytesPool, sink: PipelineCell) -> Corral {
-        Corral::new(self, pool, sink)
+    pub fn build(self, pool: BytesPool) -> Corral {
+        Corral::new(self, pool)
     }
 }
 

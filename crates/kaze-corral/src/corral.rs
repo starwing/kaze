@@ -22,7 +22,7 @@ use tracing::{error, instrument};
 use kaze_plugin::{
     protocol::{codec::NetPacketCodec, packet::BytesPool},
     util::{singleflight::Group, tower_ext::ServiceExt as _},
-    PipelineCell,
+    PipelineCell, PipelineRequired,
 };
 
 use super::options::Options;
@@ -39,13 +39,19 @@ pub struct Corral {
     exit: Notify,
 }
 
+impl PipelineRequired for Corral {
+    fn sink(&self) -> &PipelineCell {
+        &self.sink
+    }
+}
+
 impl Corral {
-    pub fn new(options: Options, pool: BytesPool, sink: PipelineCell) -> Self {
+    pub fn new(options: Options, pool: BytesPool) -> Self {
         let limit = options.limit;
         Self {
             options,
             decoder: NetPacketCodec::new(pool),
-            sink,
+            sink: PipelineCell::new(),
             group: Group::new(),
             sock_map: Mutex::new(
                 limit
@@ -56,11 +62,6 @@ impl Corral {
             join_set: Mutex::new(JoinSet::new()),
             exit: Notify::new(),
         }
-    }
-
-    /// get the sink
-    pub fn sink(&self) -> &PipelineCell {
-        &self.sink
     }
 
     /// notify all tasks to exit

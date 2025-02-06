@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use futures::StreamExt;
+use kaze_plugin::{PipelineCell, PipelineRequired};
 use metrics::counter;
 use papaya::HashMap;
 use thingbuf::mpsc::{Receiver, Sender};
@@ -14,14 +15,17 @@ use tower::service_fn;
 use tracing::error;
 
 use kaze_plugin::{
+    local_node,
     protocol::{
         message::Message,
         packet::Packet,
-        proto::{hdr, Hdr, RetCode},
+        proto::{
+            hdr::{self, RouteType},
+            Hdr, RetCode,
+        },
         service::MessageService,
     },
     util::tower_ext::ServiceExt,
-    PipelineService,
 };
 
 /// RpcTracker is a service that tracks rpc info.
@@ -31,7 +35,7 @@ pub struct RpcTracker {
     rpc_map: HashMap<u32, Info>,
     seq: AtomicU32,
     tx: Sender<Action, ActionRecycler>,
-    sink: PipelineService,
+    sink: PipelineCell,
 }
 
 enum Action {
@@ -52,18 +56,20 @@ impl Recycle<Action> for ActionRecycler {
     }
 }
 
+impl PipelineRequired for RpcTracker {
+    fn sink(&self) -> &PipelineCell {
+        &self.sink
+    }
+}
+
 impl RpcTracker {
-    pub fn new(
-        capacity: usize,
-        sink: PipelineService,
-        notify: Notify,
-    ) -> Arc<Self> {
+    pub fn new(capacity: usize, notify: Notify) -> Arc<Self> {
         let (tx, rx) = thingbuf::mpsc::with_recycle(capacity, ActionRecycler);
         let obj = Arc::new(Self {
             rpc_map: HashMap::new(),
             seq: AtomicU32::new(114514),
             tx,
-            sink,
+            sink: PipelineCell::new(),
         });
         tokio::spawn(obj.clone().run(rx, notify));
         obj
@@ -104,13 +110,17 @@ impl RpcTracker {
         }
     }
 
-    async fn handle_expired(&self, mut sink: PipelineService, key: &u32) {
+    async fn handle_expired(&self, mut sink: PipelineCell, key: &u32) {
         let msg = {
             let rpc_map = self.rpc_map.pin();
             let Some(rpc_info) = rpc_map.get(key) else {
                 return;
             };
-            Packet::from_retcode(rpc_info.hdr.clone(), RetCode::RetTimeout)
+            let mut hdr = rpc_info.hdr.clone();
+            let local_ident = local_node().ident;
+            hdr.src_ident = local_ident;
+            hdr.route_type = Some(RouteType::DstIdent(local_ident));
+            Packet::from_retcode(hdr, RetCode::RetTimeout)
         };
         if let Err(e) = sink.ready_call((msg, None)).await {
             counter!("kaze_send_timeout_errors_total").increment(1);
@@ -198,7 +208,8 @@ mod tests {
             }
         });
         let sink = BoxCloneSyncService::new(sink);
-        let tracker = RpcTracker::new(10, sink, Notify::new());
+        let tracker = RpcTracker::new(10, Notify::new());
+        tracker.sink().set(sink);
         let msg = Message::new_with_destination(
             Packet::from_hdr(Hdr {
                 body_type: "test".into(),

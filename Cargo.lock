@@ -968,9 +968,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "clap-merge",
- "kaze-protocol",
- "kaze-util",
+ "kaze-plugin",
  "moka",
  "papaya",
  "rand 0.9.0",
