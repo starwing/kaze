@@ -30,6 +30,20 @@ where
 {
 }
 
+unsafe impl<First, Second> Send for Chain<First, Second>
+where
+    First: Send,
+    Second: Send,
+{
+}
+
+unsafe impl<First, Second> Sync for Chain<First, Second>
+where
+    First: Sync,
+    Second: Sync,
+{
+}
+
 impl<First, Second> Chain<First, Second> {
     pub fn new(first: First, second: Second) -> Self {
         Self { first, second }

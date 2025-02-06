@@ -1,3 +1,4 @@
+mod layer;
 mod options;
 
 pub mod corral;

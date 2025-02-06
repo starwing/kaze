@@ -1,4 +1,3 @@
-use std::error::Error as StdError;
 use std::sync::{atomic::AtomicU32, Arc};
 use std::time::Duration;
 
@@ -8,38 +7,36 @@ use metrics::counter;
 use papaya::HashMap;
 use thingbuf::mpsc::{Receiver, Sender};
 use thingbuf::Recycle;
-use tokio::{
-    select,
-    sync::{Mutex, Notify},
-};
+use tokio::{select, sync::Notify};
 use tokio_util::time::delay_queue::Expired;
 use tokio_util::time::{delay_queue::Key, DelayQueue};
-use tower::ServiceExt;
-use tower::{
-    layer::{layer_fn, util::Stack},
-    service_fn, Layer, Service,
-};
+use tower::service_fn;
 use tracing::error;
 
-use kaze_protocol::{
-    message::{Destination, Message, Source},
-    packet::Packet,
-    proto::{hdr, Hdr, RetCode},
+use kaze_plugin::{
+    protocol::{
+        message::Message,
+        packet::Packet,
+        proto::{hdr, Hdr, RetCode},
+        service::MessageService,
+    },
+    util::tower_ext::ServiceExt,
+    PipelineService,
 };
 
 /// RpcTracker is a service that tracks rpc info.
 ///
 /// It is used to track rpc info and send response when timeout.
-pub struct RpcTracker<S> {
+pub struct RpcTracker {
     rpc_map: HashMap<u32, Info>,
     seq: AtomicU32,
     tx: Sender<Action, ActionRecycler>,
-    sink: Mutex<S>,
+    sink: PipelineService,
 }
 
 enum Action {
     None,
-    Insert(Hdr, Destination),
+    Insert(Hdr),
     Remove(u32),
     Expired(Expired<u32>),
 }
@@ -55,20 +52,18 @@ impl Recycle<Action> for ActionRecycler {
     }
 }
 
-impl<S> RpcTracker<S>
-where
-    S: Service<Message> + Unpin + Send + Sync + 'static,
-    <S as Service<Message>>::Future: Sync + Send + 'static,
-    <S as Service<Message>>::Error:
-        AsRef<dyn StdError> + Sync + Send + 'static,
-{
-    pub fn new(capacity: usize, sink: S, notify: Notify) -> Arc<Self> {
+impl RpcTracker {
+    pub fn new(
+        capacity: usize,
+        sink: PipelineService,
+        notify: Notify,
+    ) -> Arc<Self> {
         let (tx, rx) = thingbuf::mpsc::with_recycle(capacity, ActionRecycler);
         let obj = Arc::new(Self {
             rpc_map: HashMap::new(),
             seq: AtomicU32::new(114514),
             tx,
-            sink: Mutex::new(sink),
+            sink,
         });
         tokio::spawn(obj.clone().run(rx, notify));
         obj
@@ -89,13 +84,13 @@ where
             match action {
                 None => break,
                 Some(Action::None) => (),
-                Some(Action::Insert(hdr, to)) => {
+                Some(Action::Insert(hdr)) => {
                     let timeout = Duration::from_millis(hdr.timeout as u64);
                     let Some(seq) = hdr.seq() else {
                         continue;
                     };
                     let key = queue.insert(seq, timeout);
-                    self.rpc_map.pin().insert(seq, Info { hdr, key, to });
+                    self.rpc_map.pin().insert(seq, Info { hdr, key });
                 }
                 Some(Action::Remove(seq)) => {
                     if let Some(rpc_info) = self.rpc_map.pin().remove(&seq) {
@@ -103,55 +98,30 @@ where
                     }
                 }
                 Some(Action::Expired(key)) => {
-                    self.handle_expired(key.get_ref()).await
+                    self.handle_expired(self.sink.clone(), key.get_ref()).await
                 }
             }
         }
     }
 
-    async fn handle_expired(&self, key: &u32) {
+    async fn handle_expired(&self, mut sink: PipelineService, key: &u32) {
         let msg = {
             let rpc_map = self.rpc_map.pin();
             let Some(rpc_info) = rpc_map.get(key) else {
                 return;
             };
-            Message::new_with_destination(
-                Packet::from_retcode(
-                    rpc_info.hdr.clone(),
-                    RetCode::RetTimeout,
-                ),
-                Source::from_local(),
-                rpc_info.to.clone(),
-            )
+            Packet::from_retcode(rpc_info.hdr.clone(), RetCode::RetTimeout)
         };
-        let mut guard = self.sink.lock().await;
-        let sink = match guard.ready().await {
-            Ok(sink) => sink,
-            Err(e) => {
-                counter!("kaze_send_timeout_errors_total").increment(1);
-                error!(error = %e.as_ref(), "Error when wait for sink ready");
-                return;
-            }
-        };
-        if let Err(e) = sink.call(msg).await {
+        if let Err(e) = sink.ready_call((msg, None)).await {
             counter!("kaze_send_timeout_errors_total").increment(1);
-            error!(error = %e.as_ref(), "Error sending timeout response");
+            error!(error = %e, "Error sending timeout response");
         }
     }
 }
 
-impl<S> RpcTracker<S> {
-    pub fn service<'a>(
-        self: Arc<Self>,
-    ) -> impl Service<Message, Response = Message, Error = anyhow::Error> {
+impl RpcTracker {
+    pub fn service<'a>(self: Arc<Self>) -> impl MessageService<Message> {
         service_fn(move |req: Message| self.clone().record(req))
-    }
-
-    pub fn layer(self: Arc<Self>) -> impl Layer<S> {
-        layer_fn(move |inner: S| {
-            let svc = self.clone().service();
-            Stack::new(svc, inner)
-        })
     }
 
     async fn record(self: Arc<Self>, mut req: Message) -> Result<Message> {
@@ -169,10 +139,7 @@ impl<S> RpcTracker<S> {
             hdr::RpcType::Req(_) => {
                 self.assign_seq(req.packet_mut().hdr_mut());
                 self.tx
-                    .send(Action::Insert(
-                        req.packet().hdr().clone(),
-                        req.destination().clone(),
-                    ))
+                    .send(Action::Insert(req.packet().hdr().clone()))
                     .await
             }
             hdr::RpcType::Rsp(seq) => self.tx.send(Action::Remove(seq)).await,
@@ -203,30 +170,34 @@ impl<S> RpcTracker<S> {
 struct Info {
     hdr: Hdr,
     key: Key,
-    to: Destination,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use tower::util::BoxCloneSyncService;
+
     use hdr::RpcType;
+    use kaze_plugin::protocol::message::{
+        Destination, PacketWithAddr, Source,
+    };
 
     #[tokio::test]
     async fn test_rpc_tracker() {
         let notify = Arc::new(Notify::new());
         let ntf_clone = notify.clone();
-        let sink = service_fn(move |m: Message| {
+        let sink = service_fn(move |m: PacketWithAddr| {
             let ntf_clone = ntf_clone.clone();
             async move {
-                println!("message: {:?}", m);
-                assert_eq!(
-                    m.packet().hdr().ret_code,
-                    RetCode::RetTimeout as u32
-                );
+                let (packet, _) = m;
+                println!("message: {:?}", packet);
+                assert_eq!(packet.hdr().ret_code, RetCode::RetTimeout as u32);
                 ntf_clone.notify_one();
                 Ok::<_, anyhow::Error>(())
             }
         });
+        let sink = BoxCloneSyncService::new(sink);
         let tracker = RpcTracker::new(10, sink, Notify::new());
         let msg = Message::new_with_destination(
             Packet::from_hdr(Hdr {

@@ -4,9 +4,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context as _, Error, Result};
-use kaze_protocol::{
-    codec::NetPacketCodec, message::PacketWithAddr, packet::BytesPool,
-};
 use lru::LruCache;
 use metrics::{counter, gauge};
 use tokio::{
@@ -20,53 +17,30 @@ use tokio::{
 };
 use tokio_stream::StreamExt;
 use tokio_util::codec::FramedRead;
-use tower::Service;
 use tracing::{error, instrument};
 
-use kaze_util::singleflight::Group;
-use kaze_util::tower_ext::ServiceExt as _;
+use kaze_plugin::{
+    protocol::{codec::NetPacketCodec, packet::BytesPool},
+    util::{singleflight::Group, tower_ext::ServiceExt as _},
+    PipelineCell,
+};
 
 use super::options::Options;
 
-pub trait CorralSink:
-    Service<
-        PacketWithAddr,
-        Response = (),
-        Error: Into<anyhow::Error> + Sync + Send + 'static,
-        Future: Send,
-    > + Send
-    + 'static
-{
-}
-
-impl<S> CorralSink for S where
-    S: Service<
-            PacketWithAddr,
-            Response = (),
-            Error: Into<anyhow::Error> + Sync + Send + 'static,
-            Future: Send,
-        > + Send
-        + 'static
-{
-}
-
 type ConnSink = Arc<Mutex<OwnedWriteHalf>>;
 
-pub struct Corral<S> {
+pub struct Corral {
     options: Options,
     decoder: NetPacketCodec,
-    sink: S,
+    sink: PipelineCell,
     group: Group<SocketAddr, ConnSink, Error>,
     sock_map: Mutex<LruCache<SocketAddr, ConnSink>>,
     join_set: Mutex<JoinSet<()>>,
     exit: Notify,
 }
 
-unsafe impl<S> Send for Corral<S> where S: Send {}
-unsafe impl<S> Sync for Corral<S> where S: Send {}
-
-impl<S> Corral<S> {
-    pub fn new(options: Options, pool: BytesPool, sink: S) -> Self {
+impl Corral {
+    pub fn new(options: Options, pool: BytesPool, sink: PipelineCell) -> Self {
         let limit = options.limit;
         Self {
             options,
@@ -85,7 +59,7 @@ impl<S> Corral<S> {
     }
 
     /// get the sink
-    pub fn sink(&self) -> &S {
+    pub fn sink(&self) -> &PipelineCell {
         &self.sink
     }
 
@@ -133,7 +107,7 @@ impl<S> Corral<S> {
     }
 }
 
-impl<S: CorralSink + Clone> Corral<S> {
+impl Corral {
     pub async fn find_or_connect(
         self: &Arc<Self>,
         addr: SocketAddr,
@@ -190,13 +164,13 @@ impl<S: CorralSink + Clone> Corral<S> {
     }
 }
 
-pub struct ConnSource<S: CorralSink> {
+pub struct ConnSource {
     inner: FramedRead<OwnedReadHalf, NetPacketCodec>,
     addr: SocketAddr,
-    corral: Arc<Corral<S>>,
+    corral: Arc<Corral>,
 }
 
-impl<S: CorralSink> Drop for ConnSource<S> {
+impl Drop for ConnSource {
     fn drop(&mut self) {
         let corral = self.corral.clone();
         let addr = self.addr;
@@ -206,11 +180,11 @@ impl<S: CorralSink> Drop for ConnSource<S> {
     }
 }
 
-impl<S: CorralSink> ConnSource<S> {
+impl ConnSource {
     fn new(
         read_half: OwnedReadHalf,
         addr: SocketAddr,
-        corral: Arc<Corral<S>>,
+        corral: Arc<Corral>,
     ) -> Self {
         Self {
             inner: FramedRead::new(read_half, corral.decoder.clone()),
@@ -220,7 +194,7 @@ impl<S: CorralSink> ConnSource<S> {
     }
 }
 
-impl<S: CorralSink + Clone> ConnSource<S> {
+impl ConnSource {
     #[instrument(level = "trace", skip(self))]
     async fn main_loop(self, pending: Option<Duration>) {
         if let Err(e) = self.main_loop_inner(pending).await {
@@ -254,7 +228,6 @@ impl<S: CorralSink + Clone> ConnSource<S> {
                 Some(self.addr),
             ))
             .await
-            .map_err(Into::into)
             .context("Failed to transfer packet")?;
         }
         counter!("kaze_read_idle_timeout_total").increment(1);
@@ -289,7 +262,6 @@ impl<S: CorralSink + Clone> ConnSource<S> {
             Some(self.addr),
         ))
         .await
-        .map_err(Into::into)
         .context("Failed to sink packet")?;
         return Ok(true);
     }

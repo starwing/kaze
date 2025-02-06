@@ -1,10 +1,6 @@
 use std::{net::Ipv4Addr, str::FromStr, sync::Arc};
 
-use clap::Args;
-use clap_merge::ClapMerge;
-use serde::{Deserialize, Serialize};
-
-use kaze_util::duration::{parse_duration, DurationString};
+use kaze_plugin::{clap::Args, clap_merge::ClapMerge, serde::{Deserialize, Serialize}, util::duration::{parse_duration, DurationString}};
 
 use super::RateLimit;
 

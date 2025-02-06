@@ -14,15 +14,10 @@ tokio-util = { version = "0.7.13", features = ["time"] }
 tokio-stream = "0.1.17"
 lru = "0.13.0"
 tower = "0.5.2"
+futures = "0.3.31"
 
-[dependencies.clap-merge]
-path = "../clap-merge"
-
-[dependencies.kaze-util]
-path = "../kaze-util"
-
-[dependencies.kaze-protocol]
-path = "../kaze-protocol"
+[dependencies.kaze-plugin]
+path = "../kaze-plugin"
 
 [dev-dependencies.tokio]
 version = "1.43.0"

@@ -1,10 +1,11 @@
-use clap::Args;
-use clap_merge::ClapMerge;
-use kaze_protocol::packet::BytesPool;
-use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-use kaze_util::duration::{parse_duration, DurationString};
+use kaze_plugin::clap::Args;
+use kaze_plugin::clap_merge::ClapMerge;
+use kaze_plugin::protocol::packet::BytesPool;
+use kaze_plugin::serde::{Deserialize, Serialize};
+use kaze_plugin::util::duration::{parse_duration, DurationString};
+use kaze_plugin::PipelineCell;
 
 use super::corral::Corral;
 
@@ -32,7 +33,7 @@ pub struct Options {
 }
 
 impl Options {
-    pub fn build<Sink>(self, pool: BytesPool, sink: Sink) -> Corral<Sink> {
+    pub fn build(self, pool: BytesPool, sink: PipelineCell) -> Corral {
         Corral::new(self, pool, sink)
     }
 }

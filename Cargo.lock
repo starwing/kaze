@@ -900,9 +900,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "clap-merge",
- "kaze-protocol",
- "kaze-util",
+ "futures",
+ "kaze-plugin",
  "lru",
  "metrics",
  "serde",
@@ -934,6 +933,19 @@ dependencies = [
 [[package]]
 name = "kaze-host"
 version = "0.1.0"
+
+[[package]]
+name = "kaze-plugin"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "clap-merge",
+ "kaze-protocol",
+ "kaze-util",
+ "serde",
+ "tower",
+]
 
 [[package]]
 name = "kaze-protocol"
@@ -973,10 +985,6 @@ name = "kaze-resolver-consul"
 version = "0.1.0"
 
 [[package]]
-name = "kaze-sidecar-plugin"
-version = "0.1.0"
-
-[[package]]
 name = "kaze-util"
 version = "0.1.0"
 dependencies = [
@@ -1000,13 +1008,11 @@ dependencies = [
  "anyhow",
  "bugreport",
  "clap",
- "clap-merge",
  "futures",
  "kaze-corral",
  "kaze-edge",
- "kaze-protocol",
+ "kaze-plugin",
  "kaze-resolver",
- "kaze-util",
  "leaky-bucket",
  "metrics",
  "metrics-exporter-prometheus",

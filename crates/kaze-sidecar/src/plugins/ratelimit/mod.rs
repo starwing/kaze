@@ -5,7 +5,7 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 use tower::{service_fn, Service};
 
-use kaze_protocol::message::Message;
+use kaze_plugin::protocol::message::Message;
 
 pub use options::Options;
 

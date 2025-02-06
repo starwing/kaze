@@ -7,11 +7,11 @@ members = [
     "crates/kaze-corral",
     "crates/kaze-edge",
     "crates/kaze-host",
+    "crates/kaze-plugin",
     "crates/kaze-protocol",
     "crates/kaze-resolver",
     "crates/kaze-resolver-consul",
     "crates/kaze-sidecar",
-    "crates/kaze-sidecar-plugin",
     "crates/kaze-util",
     "sidecar",
 ]

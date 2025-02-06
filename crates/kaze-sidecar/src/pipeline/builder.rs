@@ -2,19 +2,22 @@
 mod tests {
     use std::sync::Arc;
 
+    use kaze_plugin::PipelineService;
     use scopeguard::defer;
-    use tower::{util::BoxCloneService, ServiceBuilder};
+    use tower::{util::BoxCloneSyncService, ServiceBuilder};
 
-    use crate::{pipeline::corral_layer, plugins::ratelimit};
-    use kaze_protocol::{
-        message::PacketWithAddr,
-        packet::{new_bytes_pool, Packet},
-        proto::Hdr,
-        service::{SinkMessage, ToMessageService},
+    use crate::plugins::ratelimit;
+    use kaze_plugin::util::tower_ext::ChainLayer;
+    use kaze_plugin::util::tower_ext::ServiceExt as _;
+    use kaze_plugin::{
+        protocol::{
+            packet::{new_bytes_pool, Packet},
+            proto::Hdr,
+            service::{SinkMessage, ToMessageService},
+        },
+        PipelineCell,
     };
     use kaze_resolver::dispatch_service;
-    use kaze_util::tower_ext::ServiceExt as _;
-    use kaze_util::tower_ext::{ChainLayer, ServiceCell};
 
     #[tokio::test]
     async fn test_builder() {
@@ -35,9 +38,7 @@ mod tests {
         let resolver = Arc::new(kaze_resolver::local::Local::new());
         let ratelimit = ratelimit::Options::default().build();
 
-        let sink_cell = ServiceCell::<
-            BoxCloneService<PacketWithAddr, (), anyhow::Error>,
-        >::new();
+        let sink_cell = PipelineCell::new();
         let corral = Arc::new(
             kaze_corral::Options::default().build(pool.clone(), sink_cell),
         );
@@ -46,11 +47,10 @@ mod tests {
             .layer(ChainLayer::new(ToMessageService::new()))
             .layer(ChainLayer::new(ratelimit.service()))
             .layer(ChainLayer::new(dispatch_service(resolver)))
-            .layer(corral_layer(corral.clone()))
-            .layer(tx.layer(pool))
+            .layer(corral.clone().layer())
+            .layer(tx.clone().layer(pool))
             .service(SinkMessage::new());
-        let mut sink: BoxCloneService<PacketWithAddr, (), anyhow::Error> =
-            BoxCloneService::new(sink);
+        let mut sink: PipelineService = BoxCloneSyncService::new(sink);
         sink.ready_call((Packet::from_hdr(Hdr::default()), None))
             .await
             .unwrap();

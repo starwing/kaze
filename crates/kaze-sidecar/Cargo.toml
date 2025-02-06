@@ -19,14 +19,8 @@ tokio-util = "0.7.13"
 thingbuf = "0.1.6"
 papaya = "0.1.8"
 
-[dependencies.clap-merge]
-path = "../clap-merge"
-
-[dependencies.kaze-protocol]
-path = "../kaze-protocol"
-
-[dependencies.kaze-util]
-path = "../kaze-util"
+[dependencies.kaze-plugin]
+path = "../kaze-plugin"
 
 [dependencies.kaze-edge]
 path = "../kaze-edge"

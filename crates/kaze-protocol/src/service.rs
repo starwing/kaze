@@ -9,6 +9,7 @@ use crate::message::{Message, PacketWithAddr};
 pub trait MessageService<R>:
     Service<Message, Response = R, Error = anyhow::Error, Future: Send>
     + Send
+    + Sync
     + Clone
 {
 }
@@ -16,6 +17,7 @@ pub trait MessageService<R>:
 impl<T, R> MessageService<R> for T where
     T: Service<Message, Response = R, Error = anyhow::Error, Future: Send>
         + Send
+        + Sync
         + Clone
 {
 }
