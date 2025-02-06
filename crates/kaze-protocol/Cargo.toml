@@ -13,9 +13,6 @@ tracing = "0.1.41"
 futures = "0.3.31"
 tower = "0.5.2"
 
-[dependencies.kaze-core]
-path = "../kaze-core"
-
 [build-dependencies]
 prost-build = "0.13.4"
 

@@ -74,7 +74,7 @@ async fn dispatch_random(
     let mut cnt = 1;
     resolver
         .visit_masked_nodes(ident, mask, |ident, addr| {
-            if rand::thread_rng().gen_ratio(1, cnt) {
+            if rand::rng().random_ratio(1, cnt) {
                 result = Some(Node::new(ident, addr));
             }
             cnt += 1;

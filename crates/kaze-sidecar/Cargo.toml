@@ -15,7 +15,9 @@ toml = "0.8.19"
 tower = "0.5.2"
 leaky-bucket = "1.1.2"
 futures = "0.3.31"
-static_assertions = "1.1.0"
+tokio-util = "0.7.13"
+thingbuf = "0.1.6"
+papaya = "0.1.8"
 
 [dependencies.clap-merge]
 path = "../clap-merge"
