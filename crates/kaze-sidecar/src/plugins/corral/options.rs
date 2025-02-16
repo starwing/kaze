@@ -5,12 +5,14 @@ use kaze_plugin::clap::Args;
 use kaze_plugin::clap_merge::ClapMerge;
 use kaze_plugin::protocol::packet::BytesPool;
 use kaze_plugin::serde::{Deserialize, Serialize};
-use kaze_plugin::util::duration::{parse_duration, DurationString};
+use kaze_plugin::util::parser;
+use kaze_plugin::util::DurationString;
 
 use super::corral::Corral;
 
 /// options for corral
 #[derive(ClapMerge, Args, Serialize, Deserialize, Clone, Debug)]
+#[serde(crate = "kaze_plugin::serde")]
 #[command(next_help_heading = "Corral configurations")]
 #[group(id = "CorralOptions")]
 pub struct Options {
@@ -21,13 +23,13 @@ pub struct Options {
 
     /// timeout for pending connection
     #[serde(default = "default_pending_timeout")]
-    #[arg(long, value_parser = parse_duration, default_value_t = default_pending_timeout())]
+    #[arg(long, value_parser = parser::parse_duration, default_value_t = default_pending_timeout())]
     #[arg(value_name = "DURATION")]
     pub pending_timeout: DurationString,
 
     /// timeout for idle connection
     #[serde(default = "default_idle_timeout")]
-    #[arg(long, value_parser = parse_duration, default_value_t = default_idle_timeout())]
+    #[arg(long, value_parser = parser::parse_duration, default_value_t = default_idle_timeout())]
     #[arg(value_name = "DURATION")]
     pub idle_timeout: DurationString,
 }

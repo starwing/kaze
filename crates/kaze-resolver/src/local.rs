@@ -9,6 +9,12 @@ pub struct Local {
     node_map: Arc<HashMap<u32, SocketAddr>>,
 }
 
+impl Default for Local {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Resolver for Local {
     async fn add_node(&self, ident: u32, addr: SocketAddr) {
         self.node_map.pin().insert(ident, addr);

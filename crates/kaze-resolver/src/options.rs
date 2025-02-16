@@ -7,7 +7,7 @@ use kaze_plugin::{
     clap::Args,
     clap_merge::ClapMerge,
     serde::{Deserialize, Serialize},
-    util::duration::{parse_duration, DurationString},
+    util::DurationString,
 };
 
 use crate::{cached::Cached, local::Local, Resolver};
@@ -23,7 +23,7 @@ pub struct Options {
 
     /// Live time of entries in resolver mask cache
     #[serde(default = "default_local_livetime")]
-    #[arg(long, value_parser = parse_duration, default_value_t = default_local_livetime())]
+    #[arg(long, default_value_t = default_local_livetime())]
     #[arg(value_name = "DURATION")]
     pub live_time: DurationString,
 

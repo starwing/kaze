@@ -1,5 +1,6 @@
 use std::future::{ready, Ready};
 
+use kaze_util::tower_ext::Chain;
 use tower::Service;
 use tracing::info;
 
@@ -46,6 +47,13 @@ impl tower::Service<PacketWithAddr> for ToMessageService {
 
     fn call(&mut self, req: PacketWithAddr) -> Self::Future {
         std::future::ready(Ok(req.into()))
+    }
+}
+
+impl<S> tower::Layer<S> for ToMessageService {
+    type Service = Chain<ToMessageService, S>;
+    fn layer(&self, inner: S) -> Chain<ToMessageService, S> {
+        Chain::new(self.clone(), inner)
     }
 }
 

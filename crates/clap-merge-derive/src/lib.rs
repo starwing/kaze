@@ -34,6 +34,7 @@ fn impl_merge(
     let mut default_body = proc_macro2::TokenStream::new();
     let mut clap_merge_body = proc_macro2::TokenStream::new();
     let mut create_default = true;
+    let mut clap = quote! { clap };
 
     if let Some(attr) = input
         .attrs
@@ -43,6 +44,11 @@ fn impl_merge(
         attr.parse_nested_meta(|nested| {
             if nested.path.is_ident("no_default") {
                 create_default = false;
+            }
+            if nested.path.is_ident("crate") {
+                let value = nested.value()?;
+                let value: syn::Path = value.parse()?;
+                clap = quote! { #value };
             }
             Ok(())
         })?;
@@ -64,7 +70,7 @@ fn impl_merge(
         // Parse attributes on the field
         for attr in &field.attrs {
             if attr.path().is_ident("arg") {
-                let (id, skip, def) = parse_arg_attrs(attr)?;
+                let (id, skip, def) = parse_arg_attrs(attr, &ty, &clap)?;
                 if let Some(id) = id {
                     field_id = id;
                 }
@@ -90,10 +96,7 @@ fn impl_merge(
             }
         }
 
-        default_body.extend(if is_option_type(ty) && cur_default.is_some() {
-            let def = cur_default.unwrap();
-            quote! { #field_name: Some(#def), }
-        } else {
+        default_body.extend({
             let def = cur_default.unwrap_or_else(|| {
                 quote! { Default::default() }
             });
@@ -147,8 +150,8 @@ fn impl_merge(
         #default_body
 
         impl ClapMerge for #struct_name {
-            fn merge(&mut self, args: &clap::ArgMatches) -> bool {
-                use clap::parser::ValueSource;
+            fn merge(&mut self, args: &#clap::ArgMatches) -> bool {
+                use #clap::parser::ValueSource;
                 let mut changed = false;
 
                 #clap_merge_body
@@ -177,6 +180,8 @@ fn retrive_named_fields(
 
 fn parse_arg_attrs(
     attr: &syn::Attribute,
+    ty: &syn::Type,
+    clap_path: &proc_macro2::TokenStream,
 ) -> Result<(Option<String>, bool, Option<proc_macro2::TokenStream>), syn::Error>
 {
     let mut field_id = None;
@@ -213,14 +218,14 @@ fn parse_arg_attrs(
                     default_body = Some(quote! { #default_value });
                 } else if path.path.is_ident("default_value")
                     || path.path.is_ident("default_missing_value")
+                    || path.path.is_ident("default_value_os")
                 {
-                    let default_value = &assign.right;
-                    if let Some(parser) = &value_parser {
-                        default_body =
-                            Some(quote! { #parser(#default_value).unwrap() });
-                    } else {
-                        default_body = Some(quote! { #default_value.into() });
-                    }
+                    default_body = Some(make_default(
+                        &assign.right,
+                        value_parser.as_ref().map(|vp| quote! { #vp }),
+                        ty,
+                        clap_path,
+                    ));
                 }
             }
         } else if let Expr::Path(path) = item {
@@ -233,12 +238,59 @@ fn parse_arg_attrs(
     return Ok((field_id, skip_field, default_body));
 }
 
-/// Checks if a type is `Option<T>`
+/// Creates a default value for a field based on the type and value parser
+fn make_default(
+    default_value: &Expr,
+    value_parser: Option<proc_macro2::TokenStream>,
+    ty: &syn::Type,
+    clap_path: &proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    let inner_type = get_option_inner_type(ty);
+    let value_parser = value_parser
+        .unwrap_or(quote! { #clap_path::value_parser!(#inner_type) });
+    let to_option =
+        is_option_type(ty).then(|| quote! { .map(std::option::Option::Some) });
+    quote! {{
+        use #clap_path::{Arg, Command, Error, error::ErrorKind};
+        const dummy_id: &str = "__clap_derive_dummy__";
+        Command::new("__clap_derive_tmp__")
+            .arg(Arg::new(dummy_id)
+                .default_value(#default_value)
+                .value_parser(#value_parser))
+            .try_get_matches()
+            .and_then(|m| m.get_one::<#inner_type>(dummy_id)
+                .cloned().ok_or_else(||
+                    Error::new(ErrorKind::InvalidValue)))
+            #to_option
+            .unwrap_or_else(|_|
+                panic!("Invalid clap default value `{:?}` for type `{}`",
+                    #default_value, stringify!(#ty)))
+    }}
+}
+
+// check if the type is `Option<T>`
 fn is_option_type(ty: &syn::Type) -> bool {
     if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.first() {
-            return segment.ident == "Option";
+        type_path
+            .path
+            .segments
+            .last()
+            .map_or(false, |seg| seg.ident == "Option")
+    } else {
+        false
+    }
+}
+
+fn get_option_inner_type(ty: &syn::Type) -> proc_macro2::TokenStream {
+    if is_option_type(&ty) {
+        if let syn::Type::Path(type_path) = &ty {
+            if let syn::PathArguments::AngleBracketed(args) =
+                &type_path.path.segments.last().unwrap().arguments
+            {
+                let args = args.args.clone();
+                return quote! { #args };
+            }
         }
     }
-    false
+    quote! { #ty }
 }

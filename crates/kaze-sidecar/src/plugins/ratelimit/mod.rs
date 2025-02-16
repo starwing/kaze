@@ -3,9 +3,9 @@ mod options;
 use leaky_bucket::RateLimiter;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
-use tower::{service_fn, Service};
+use tower::service_fn;
 
-use kaze_plugin::protocol::message::Message;
+use kaze_plugin::protocol::{message::Message, service::MessageService};
 
 pub use options::Options;
 
@@ -72,14 +72,7 @@ impl RateLimit {
 }
 
 impl RateLimit {
-    pub fn service(
-        self: Arc<Self>,
-    ) -> impl Service<
-        Message,
-        Response = Message,
-        Error = anyhow::Error,
-        Future: Send,
-    > + Clone {
+    pub fn service(self: Arc<Self>) -> impl MessageService<Message> {
         service_fn(move |req: Message| self.clone().handle_request(req))
     }
 

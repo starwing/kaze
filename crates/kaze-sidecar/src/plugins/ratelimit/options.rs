@@ -1,10 +1,16 @@
 use std::{net::Ipv4Addr, str::FromStr, sync::Arc};
 
-use kaze_plugin::{clap::Args, clap_merge::ClapMerge, serde::{Deserialize, Serialize}, util::duration::{parse_duration, DurationString}};
+use kaze_plugin::{
+    clap::Args,
+    clap_merge::ClapMerge,
+    serde::{Deserialize, Serialize},
+    util::DurationString,
+};
 
 use super::RateLimit;
 
 #[derive(ClapMerge, Args, Serialize, Deserialize, Clone, Debug)]
+#[serde(crate = "kaze_plugin::serde")]
 #[command(next_help_heading = "Rate limit configurations")]
 #[group(id = "RateLimitOptions")]
 pub struct Options {
@@ -23,7 +29,7 @@ pub struct Options {
     /// refill interval
     #[serde(default = "default_interval")]
     #[arg(id = "rate_limit_interval", long = "total-interval")]
-    #[arg(value_parser = parse_duration, default_value_t = default_interval())]
+    #[arg(default_value_t = default_interval())]
     #[arg(value_name = "DURATION")]
     pub interval: DurationString,
 
@@ -39,6 +45,7 @@ impl Options {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(crate = "kaze_plugin::serde")]
 pub struct PerMsgLimitInfo {
     pub ident: Option<Ipv4Addr>,
     pub body_type: Option<String>,

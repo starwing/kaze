@@ -36,13 +36,11 @@ mod tests {
         let pool = new_bytes_pool();
         let resolver = Arc::new(kaze_resolver::local::Local::new());
         let ratelimit = ratelimit::Options::default().build();
-
         let corral = corral::Options::default().build(pool.clone());
-
         let tracker = RpcTracker::new(10, Notify::new());
 
         let sink = ServiceBuilder::new()
-            .layer(ChainLayer::new(ToMessageService::new()))
+            .layer(ToMessageService::new())
             .layer(ChainLayer::new(ratelimit.service()))
             .layer(ChainLayer::new(dispatch_service(resolver)))
             .layer(ChainLayer::new(tracker.clone().service()))

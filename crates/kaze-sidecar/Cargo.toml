@@ -10,7 +10,6 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 tracing-appender = "0.2.3"
 bugreport = "0.5.0"
 metrics = "0.24.1"
-serde = "1.0.216"
 toml = "0.8.19"
 tower = "0.5.2"
 leaky-bucket = "1.1.2"
@@ -20,6 +19,7 @@ thingbuf = "0.1.6"
 papaya = "0.1.8"
 lru = "0.13.0"
 tokio-stream = "0.1.17"
+scopeguard = "1.2.0"
 
 [dependencies.kaze-plugin]
 path = "../kaze-plugin"
