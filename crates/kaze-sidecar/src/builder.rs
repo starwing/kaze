@@ -15,11 +15,7 @@ use tower::{util::BoxCloneSyncService, ServiceBuilder};
 
 use crate::{
     options::Options,
-    plugins::{
-        corral::{self},
-        ratelimit::{self},
-        tracker::RpcTracker,
-    },
+    plugins::tracker::RpcTracker,
     sidecar::Sidecar,
 };
 
@@ -49,7 +45,7 @@ impl Options {
             .layer(corral.clone().layer())
             .layer(tx.clone().layer(pool))
             .service(SinkMessage::new());
-        let mut sink: PipelineService = BoxCloneSyncService::new(sink);
+        let sink: PipelineService = BoxCloneSyncService::new(sink);
         Sidecar::new(sink)
     }
 }

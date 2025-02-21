@@ -20,7 +20,7 @@ impl<Inner: Clone, Outer> Layer<Outer> for ChainLayer<Inner> {
     }
 }
 
-impl<Inner: Clone, Outer> Clone for ChainLayer<Option<Inner>> {
+impl<Inner: Clone> Clone for ChainLayer<Option<Inner>> {
     fn clone(&self) -> Self {
         Self {
             service: self.service.clone(),

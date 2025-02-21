@@ -4,6 +4,8 @@ pub use clap;
 pub use clap_merge_derive::ClapMerge;
 
 pub trait ClapMerge {
+    /// merge the arguments from ArgMatches into self, return true if self has
+    /// been updated
     fn merge(&mut self, args: &ArgMatches) -> bool;
 }
 

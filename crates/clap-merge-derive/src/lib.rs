@@ -63,7 +63,7 @@ fn impl_merge(
         let mut field_id = field_name.to_string(); // Default ID is the field name
         let ty = &field.ty; // Field type
 
-        let mut skip_field = true;
+        let mut skip_field = false;
         let mut recursive = false;
         let mut cur_default = None;
 
