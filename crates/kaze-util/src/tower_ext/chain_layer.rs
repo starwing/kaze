@@ -31,7 +31,7 @@ impl<Inner: Clone> Clone for ChainLayer<Option<Inner>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tower::{service_fn, ServiceExt as _};
+    use tower::{ServiceExt as _, service_fn};
 
     #[tokio::test]
     async fn test_chain_layer() {

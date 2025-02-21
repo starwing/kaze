@@ -22,9 +22,9 @@ pub struct kz_Context {
 }
 
 #[link(name = "kaze")]
-extern "C" {
+unsafe extern "C" {
     pub fn kz_aligned_bufsize(required_size: usize, page_size: usize)
-        -> usize;
+    -> usize;
 
     pub fn kz_exists(name: *const c_char) -> i32;
     pub fn kz_unlink(name: *const c_char) -> i32;

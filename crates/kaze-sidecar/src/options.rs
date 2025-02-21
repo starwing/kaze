@@ -4,8 +4,8 @@ use std::{
     sync::LazyLock,
 };
 
-use anyhow::{bail, Context, Result};
-use clap::{crate_version, Args, CommandFactory, FromArgMatches, Parser};
+use anyhow::{Context, Result, bail};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, crate_version};
 use tracing::info;
 
 use kaze_plugin::clap_merge::ClapMerge;
@@ -17,19 +17,19 @@ use crate::plugins::{corral, log, ratelimit};
 pub fn parse_args() -> Result<Options> {
     let args = Options::command().get_matches();
 
-    let args = if let Some(cfg_path) =
-        args.get_one::<PathBuf>("config").filter(|p| p.exists())
-    {
-        info!("use config file {}", cfg_path.display());
-        let mut config: Options = toml::from_str(
-            &std::fs::read_to_string(&cfg_path)
-                .context("Failed to read config file")?,
-        )
-        .context("Failed to parse config file")?;
-        config.merge(&args);
-        config
-    } else {
-        Options::from_arg_matches(&args).context("Failed to parse config")?
+    let args = match args.get_one::<PathBuf>("config").filter(|p| p.exists()) {
+        Some(cfg_path) => {
+            info!("use config file {}", cfg_path.display());
+            let mut config: Options = toml::from_str(
+                &std::fs::read_to_string(&cfg_path)
+                    .context("Failed to read config file")?,
+            )
+            .context("Failed to parse config file")?;
+            config.merge(&args);
+            config
+        }
+        _ => Options::from_arg_matches(&args)
+            .context("Failed to parse config")?,
     };
 
     validate_args(&args)?;

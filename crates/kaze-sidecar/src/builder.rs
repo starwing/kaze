@@ -1,22 +1,20 @@
 use std::sync::Arc;
 
 use kaze_plugin::{
+    PipelineService,
     protocol::{
         packet::new_bytes_pool,
         service::{SinkMessage, ToMessageService},
     },
     util::tower_ext::ChainLayer,
-    PipelineService,
 };
 use kaze_resolver::dispatch_service;
 use scopeguard::defer;
 use tokio::sync::Notify;
-use tower::{util::BoxCloneSyncService, ServiceBuilder};
+use tower::{ServiceBuilder, util::BoxCloneSyncService};
 
 use crate::{
-    options::Options,
-    plugins::tracker::RpcTracker,
-    sidecar::Sidecar,
+    options::Options, plugins::tracker::RpcTracker, sidecar::Sidecar,
 };
 
 impl Options {

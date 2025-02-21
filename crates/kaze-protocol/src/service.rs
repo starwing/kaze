@@ -1,4 +1,4 @@
-use std::future::{ready, Ready};
+use std::future::{Ready, ready};
 
 use kaze_util::tower_ext::Chain;
 use tower::Service;

@@ -1,6 +1,6 @@
 use std::io::{Error, ErrorKind};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use prost::Message;
 use tokio_util::{
     bytes::{Buf, BufMut, BytesMut},

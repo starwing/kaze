@@ -5,17 +5,17 @@ mod tests {
     use kaze_plugin::PipelineService;
     use scopeguard::defer;
     use tokio::sync::Notify;
-    use tower::{util::BoxCloneSyncService, ServiceBuilder};
+    use tower::{ServiceBuilder, util::BoxCloneSyncService};
 
     use crate::plugins::{corral, ratelimit, tracker::RpcTracker};
+    use kaze_plugin::PipelineRequired;
     use kaze_plugin::protocol::{
-        packet::{new_bytes_pool, Packet},
+        packet::{Packet, new_bytes_pool},
         proto::Hdr,
         service::{SinkMessage, ToMessageService},
     };
     use kaze_plugin::util::tower_ext::ChainLayer;
     use kaze_plugin::util::tower_ext::ServiceExt as _;
-    use kaze_plugin::PipelineRequired;
     use kaze_resolver::dispatch_service;
 
     #[tokio::test]

@@ -7,8 +7,8 @@ mod sink_service;
 pub use chain_layer::ChainLayer;
 pub use chain_service::Chain;
 pub use ready_call::ReadyCall;
-pub use sink_service::SinkService;
 pub use service_cell::ServiceCell;
+pub use sink_service::SinkService;
 
 use tower::Service;
 

@@ -3,13 +3,13 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, Context as _, Error, Result};
+use anyhow::{Context as _, Error, Result, bail};
 use lru::LruCache;
 use metrics::{counter, gauge};
 use tokio::{
     net::{
-        tcp::{OwnedReadHalf, OwnedWriteHalf},
         TcpStream,
+        tcp::{OwnedReadHalf, OwnedWriteHalf},
     },
     select,
     sync::{Mutex, Notify},
@@ -20,9 +20,9 @@ use tokio_util::codec::FramedRead;
 use tracing::{error, instrument};
 
 use kaze_plugin::{
+    PipelineCell, PipelineRequired,
     protocol::{codec::NetPacketCodec, packet::BytesPool},
     util::{singleflight::Group, tower_ext::ServiceExt as _},
-    PipelineCell, PipelineRequired,
 };
 
 use super::options::Options;

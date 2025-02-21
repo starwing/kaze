@@ -1,4 +1,7 @@
-use std::{net::{IpAddr, Ipv4Addr, SocketAddr}, sync::Mutex};
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::Mutex,
+};
 
 use kaze_protocol::message::Node;
 

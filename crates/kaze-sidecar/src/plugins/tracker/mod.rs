@@ -1,4 +1,4 @@
-use std::sync::{atomic::AtomicU32, Arc};
+use std::sync::{Arc, atomic::AtomicU32};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -6,11 +6,11 @@ use futures::StreamExt;
 use kaze_plugin::{PipelineCell, PipelineRequired};
 use metrics::counter;
 use papaya::HashMap;
-use thingbuf::mpsc::{Receiver, Sender};
 use thingbuf::Recycle;
+use thingbuf::mpsc::{Receiver, Sender};
 use tokio::{select, sync::Notify};
 use tokio_util::time::delay_queue::Expired;
-use tokio_util::time::{delay_queue::Key, DelayQueue};
+use tokio_util::time::{DelayQueue, delay_queue::Key};
 use tower::service_fn;
 use tracing::error;
 
@@ -20,8 +20,8 @@ use kaze_plugin::{
         message::Message,
         packet::Packet,
         proto::{
-            hdr::{self, RouteType},
             Hdr, RetCode,
+            hdr::{self, RouteType},
         },
         service::MessageService,
     },
@@ -130,7 +130,9 @@ impl RpcTracker {
 }
 
 impl RpcTracker {
-    pub fn service<'a>(self: Arc<Self>) -> impl MessageService<Message> {
+    pub fn service<'a>(
+        self: Arc<Self>,
+    ) -> impl MessageService<Message> + use<> {
         service_fn(move |req: Message| self.clone().record(req))
     }
 

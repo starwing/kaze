@@ -120,7 +120,7 @@ mod tests {
     use futures_test::{sink::SinkTestExt, task::noop_context};
     use kaze_protocol::{
         codec::NetPacketCodec,
-        packet::{new_bytes_pool, Packet},
+        packet::{Packet, new_bytes_pool},
         proto::Hdr,
     };
     use tokio_util::codec::FramedWrite;
@@ -187,10 +187,11 @@ mod tests {
         // sink still return ready when the deplex is full
         assert!(sink.poll_ready(&mut cx).is_ready());
         // but flush call returns pending
-        assert!(sink
-            .into_inner()
-            .unwrap()
-            .poll_flush_unpin(&mut cx)
-            .is_pending());
+        assert!(
+            sink.into_inner()
+                .unwrap()
+                .poll_flush_unpin(&mut cx)
+                .is_pending()
+        );
     }
 }

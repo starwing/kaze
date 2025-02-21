@@ -1,4 +1,4 @@
-use bytes::{buf::UninitSlice, Buf, BufMut};
+use bytes::{Buf, BufMut, buf::UninitSlice};
 use std::{fmt::Debug, slice};
 
 #[derive(Clone, Copy)]

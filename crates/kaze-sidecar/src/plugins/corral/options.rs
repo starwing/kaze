@@ -5,8 +5,8 @@ use kaze_plugin::clap::Args;
 use kaze_plugin::clap_merge::ClapMerge;
 use kaze_plugin::protocol::packet::BytesPool;
 use kaze_plugin::serde::{Deserialize, Serialize};
-use kaze_plugin::util::parser;
 use kaze_plugin::util::DurationString;
+use kaze_plugin::util::parser;
 
 use super::corral::Corral;
 

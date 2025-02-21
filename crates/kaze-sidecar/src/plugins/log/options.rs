@@ -66,7 +66,7 @@ fn parse_rotation(s: &str) -> anyhow::Result<Rotation> {
 }
 
 mod serde_rotation {
-    use kaze_plugin::serde::{self, de::Visitor, Deserializer, Serializer};
+    use kaze_plugin::serde::{self, Deserializer, Serializer, de::Visitor};
     use tracing_appender::rolling::Rotation;
 
     pub fn serialize<S>(

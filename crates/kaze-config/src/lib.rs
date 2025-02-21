@@ -40,10 +40,9 @@ impl ConfigBuilder {
         table_name: &str,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // if the table is not present, use the default value
-        let config = if let Some(table) = self.content.get(table_name) {
-            T::deserialize(table.clone())?
-        } else {
-            default_from_clap()
+        let config = match self.content.get(table_name) {
+            Some(table) => T::deserialize(table.clone())?,
+            _ => default_from_clap(),
         };
 
         // box the config

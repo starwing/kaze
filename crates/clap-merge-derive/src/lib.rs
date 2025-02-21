@@ -3,8 +3,8 @@ extern crate proc_macro;
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    parse::Error, parse_macro_input, punctuated::Punctuated, token::Comma,
     Data, DataStruct, DeriveInput, Expr, ExprLit, Fields, FieldsNamed, Lit,
+    parse::Error, parse_macro_input, punctuated::Punctuated, token::Comma,
 };
 
 #[proc_macro_derive(
@@ -193,46 +193,54 @@ fn parse_arg_attrs(
         attr.parse_args_with(Punctuated::<Expr, Comma>::parse_terminated)?;
 
     for item in punctuated {
-        if let Expr::Assign(assign) = item {
+        match item {
+            Expr::Assign(assign) =>
             // process key = value
-            if let Expr::Path(path) = assign.left.as_ref() {
-                if path.path.is_ident("id") {
-                    // process id
-                    if let Expr::Lit(ExprLit {
-                        lit: Lit::Str(lit_str),
-                        ..
-                    }) = assign.right.as_ref()
+            {
+                if let Expr::Path(path) = assign.left.as_ref() {
+                    if path.path.is_ident("id") {
+                        // process id
+                        match assign.right.as_ref() {
+                            Expr::Lit(ExprLit {
+                                lit: Lit::Str(lit_str),
+                                ..
+                            }) => {
+                                field_id = Some(lit_str.value());
+                            }
+                            _ => {
+                                return Err(Error::new_spanned(
+                                    assign.right,
+                                    "id must be a string literal",
+                                ));
+                            }
+                        }
+                    } else if path.path.is_ident("value_parser") {
+                        // process value_parser
+                        value_parser = Some(*assign.right);
+                    } else if path.path.is_ident("default_value_t") {
+                        let default_value = &assign.right;
+                        default_body = Some(quote! { #default_value });
+                    } else if path.path.is_ident("default_value")
+                        || path.path.is_ident("default_missing_value")
+                        || path.path.is_ident("default_value_os")
                     {
-                        field_id = Some(lit_str.value());
-                    } else {
-                        return Err(Error::new_spanned(
-                            assign.right,
-                            "id must be a string literal",
+                        default_body = Some(make_default(
+                            &assign.right,
+                            value_parser.as_ref().map(|vp| quote! { #vp }),
+                            ty,
+                            clap_path,
                         ));
                     }
-                } else if path.path.is_ident("value_parser") {
-                    // process value_parser
-                    value_parser = Some(*assign.right);
-                } else if path.path.is_ident("default_value_t") {
-                    let default_value = &assign.right;
-                    default_body = Some(quote! { #default_value });
-                } else if path.path.is_ident("default_value")
-                    || path.path.is_ident("default_missing_value")
-                    || path.path.is_ident("default_value_os")
-                {
-                    default_body = Some(make_default(
-                        &assign.right,
-                        value_parser.as_ref().map(|vp| quote! { #vp }),
-                        ty,
-                        clap_path,
-                    ));
                 }
             }
-        } else if let Expr::Path(path) = item {
+            Expr::Path(path) =>
             // process `#[arg(skip)]`
-            if path.path.is_ident("skip") {
-                skip_field = true;
+            {
+                if path.path.is_ident("skip") {
+                    skip_field = true;
+                }
             }
+            _ => {}
         }
     }
     return Ok((field_id, skip_field, default_body));

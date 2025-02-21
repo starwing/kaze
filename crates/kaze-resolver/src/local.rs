@@ -50,7 +50,7 @@ impl Resolver for Local {
         self.node_map
             .pin()
             .iter()
-            .filter(|(&e, _)| e & mask == ident)
+            .filter(|&(&e, _)| e & mask == ident)
             .map(|(&k, &v)| (k, v))
             .for_each(|(k, v)| f(k, v));
     }

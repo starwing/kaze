@@ -12,10 +12,10 @@ use prost::Message;
 use tokio_util::bytes::{Buf, BufMut, BytesMut};
 
 use crate::{
-    codec::{decode_packet, BufWrapper},
-    proto::hdr::RpcType,
+    codec::{BufWrapper, decode_packet},
     proto::Hdr,
     proto::RetCode,
+    proto::hdr::RpcType,
 };
 
 /// the bytes pool used by `Packet`
@@ -136,9 +136,9 @@ impl Packet {
     pub fn body(&self) -> &[u8] {
         match &self.body {
             PacketBody::Empty => &[],
-            PacketBody::FromBuf(ref data) => data.as_ref(),
-            PacketBody::FromHost(ref data) => data.as_ref(),
-            PacketBody::FromNode(ref data) => data.as_ref(),
+            PacketBody::FromBuf(data) => data.as_ref(),
+            PacketBody::FromHost(data) => data.as_ref(),
+            PacketBody::FromNode(data) => data.as_ref(),
         }
     }
 
@@ -222,8 +222,10 @@ impl<'a> PacketIoVec<'a> {
     unsafe fn split_ref(
         &'a mut self,
     ) -> (&'a mut Self, &'a PacketIoVecData<'a>) {
-        let data_ptr = addr_of!(self.data);
-        (self, &*data_ptr)
+        unsafe {
+            let data_ptr = addr_of!(self.data);
+            (self, &*data_ptr)
+        }
     }
 
     fn from_hdr_body(&'a mut self, packet: &'a Packet) -> [IoSlice<'a>; 2] {
@@ -331,7 +333,7 @@ mod tests {
 
     use super::*;
 
-    use futures::{executor::block_on, StreamExt};
+    use futures::{StreamExt, executor::block_on};
     use tokio_util::{bytes::BytesMut, codec::FramedRead};
 
     async fn test_packet(packet: &Packet, pool: BytesPool) -> Packet {

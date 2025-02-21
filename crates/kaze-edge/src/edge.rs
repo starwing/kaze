@@ -1,9 +1,9 @@
 use std::{borrow::Cow, net::Ipv4Addr, ptr::addr_of_mut, sync::Arc};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use metrics::counter;
 use tokio::{sync::Mutex, task::block_in_place};
-use tower::{layer::layer_fn, service_fn, Layer};
+use tower::{Layer, layer::layer_fn, service_fn};
 use tracing::{error, info, warn};
 
 use kaze_core::{self, KazeState};
@@ -55,11 +55,11 @@ impl Edge {
                     .context("Failed to open submission queue")?;
                 let (sender, receiver) = sq.owner();
                 bail!(
-                "shm queue {} already exists, previous kaze sender={} receiver={}",
-                sq_name,
-                sender,
-                receiver
-            );
+                    "shm queue {} already exists, previous kaze sender={} receiver={}",
+                    sq_name,
+                    sender,
+                    receiver
+                );
             } else {
                 if let Err(e) = KazeState::unlink(&sq_name) {
                     warn!(error = %e, "Failed to unlink submission queue");

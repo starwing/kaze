@@ -1,6 +1,6 @@
 use std::{
     future::Future,
-    task::{ready, Poll},
+    task::{Poll, ready},
 };
 
 use tower::Service;
@@ -135,7 +135,7 @@ where
                     self.set(ChainFuture::WaitingOuter { fut });
                 }
                 ChainFutureProj::WaitingOuter { fut } => {
-                    return fut.poll(cx).map_err(Into::into)
+                    return fut.poll(cx).map_err(Into::into);
                 }
             }
         }
@@ -145,7 +145,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::super::ServiceExt as _;
-    use tower::{service_fn, ServiceExt};
+    use tower::{ServiceExt, service_fn};
 
     #[tokio::test]
     async fn test_chain_service() {

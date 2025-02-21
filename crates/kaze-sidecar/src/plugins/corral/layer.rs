@@ -3,7 +3,7 @@ use std::{io::IoSlice, sync::Arc};
 use anyhow::Context as _;
 use futures::future::join_all;
 use tokio::io::AsyncWriteExt;
-use tower::{layer::layer_fn, service_fn, Layer};
+use tower::{Layer, layer::layer_fn, service_fn};
 use tracing::error;
 
 use kaze_plugin::protocol::{
@@ -96,10 +96,13 @@ async fn corral_send_raw(
     iovec: &[IoSlice<'_>],
     dst: Node,
 ) -> Result<(), anyhow::Error> {
-    if let Some(conn) = corral.find_or_connect(dst.addr).await? {
-        conn.lock().await.write_vectored(iovec).await?;
-    } else {
-        error!(addr = ?dst, "Failed to find connection");
+    match corral.find_or_connect(dst.addr).await? {
+        Some(conn) => {
+            conn.lock().await.write_vectored(iovec).await?;
+        }
+        _ => {
+            error!(addr = ?dst, "Failed to find connection");
+        }
     }
     Ok(())
 }

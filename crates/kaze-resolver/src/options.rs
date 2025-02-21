@@ -10,7 +10,7 @@ use kaze_plugin::{
     util::DurationString,
 };
 
-use crate::{cached::Cached, local::Local, Resolver};
+use crate::{Resolver, cached::Cached, local::Local};
 
 #[derive(ClapMerge, Args, Serialize, Deserialize, Clone, Debug)]
 #[command(next_help_heading = "Local resolver configurations")]
