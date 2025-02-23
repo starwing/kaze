@@ -14,7 +14,9 @@ use tokio::sync::Notify;
 use tower::{ServiceBuilder, util::BoxCloneSyncService};
 
 use crate::{
-    options::Options, plugins::tracker::RpcTracker, sidecar::Sidecar,
+    options::Options,
+    plugins::{ratelimit::RateLimit, tracker::RpcTracker},
+    sidecar::Sidecar,
 };
 
 impl Options {
@@ -31,13 +33,13 @@ impl Options {
 
         let resolver = Arc::new(self.local.build().await);
         // TODO: handle Option<RateLimit>
-        let ratelimit = self.rate_limit.map(|o| o.build()).unwrap();
+        let ratelimit = self.rate_limit.map(|o| o.build());
         let corral = self.corral.build(pool.clone());
         let tracker = RpcTracker::new(10, Notify::new());
 
         let sink = ServiceBuilder::new()
             .layer(ToMessageService::new())
-            .layer(ChainLayer::new(ratelimit.service()))
+            .layer(ChainLayer::optional(ratelimit.map(RateLimit::service)))
             .layer(ChainLayer::new(dispatch_service(resolver)))
             .layer(ChainLayer::new(tracker.clone().service()))
             .layer(corral.clone().layer())

@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "crates/clap-merge",
     "crates/clap-merge-derive",
-    "crates/kaze-config",
     "crates/kaze-core",
     "crates/kaze-edge",
     "crates/kaze-host",

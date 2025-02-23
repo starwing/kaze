@@ -3,6 +3,7 @@ use std::{
     task::{Poll, ready},
 };
 
+use pin_project::pin_project;
 use tower::Service;
 
 pub struct Chain<First, Second> {
@@ -83,22 +84,21 @@ where
     }
 }
 
-pin_project_lite::pin_project! {
-    #[project = ChainFutureProj]
-    pub enum ChainFuture<Fut, Second, T, E> where
-        Fut: Future<Output = Result<T, E>>,
-        Second: Service<T>,
-    {
-        WaitingInner {
-            #[pin]
-            fut: Fut,
-            second: Second,
-        },
-        WaitingOuter {
-            #[pin]
-            fut: Second::Future,
-        },
-    }
+#[pin_project(project = ChainFutureProj)]
+pub enum ChainFuture<Fut, Second, T, E>
+where
+    Fut: Future<Output = Result<T, E>>,
+    Second: Service<T>,
+{
+    WaitingInner {
+        #[pin]
+        fut: Fut,
+        second: Second,
+    },
+    WaitingOuter {
+        #[pin]
+        fut: Second::Future,
+    },
 }
 
 impl<Fut, Second, T, E> ChainFuture<Fut, Second, T, E>

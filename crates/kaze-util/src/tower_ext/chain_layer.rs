@@ -1,6 +1,6 @@
 use tower::Layer;
 
-use super::chain_service::Chain;
+use super::{OptionService, chain_service::Chain};
 
 pub struct ChainLayer<S> {
     service: S,
@@ -9,6 +9,14 @@ pub struct ChainLayer<S> {
 impl<S> ChainLayer<S> {
     pub fn new(service: S) -> Self {
         Self { service }
+    }
+}
+
+impl<S> ChainLayer<OptionService<S>> {
+    pub fn optional(service: Option<S>) -> Self {
+        Self {
+            service: OptionService::new(service),
+        }
     }
 }
 

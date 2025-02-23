@@ -6,13 +6,12 @@ edition = "2024"
 [dependencies]
 tokio = { version = "1.43.0", features = ["sync", "macros", "rt"] }
 tokio-util = { version = "0.7.13", features = ["time"] }
-anyhow = "1.0.95"
+anyhow = "1.0.96"
 duration-string = { version = "0.5.2", features = ["serde"] }
 futures = "0.3.31"
 parking_lot = "0.12.3"
-pin-project = "1.1.8"
+pin-project = "1.1.9"
 tower = { version = "0.5.2", features = ["util"] }
-pin-project-lite = "0.2.16"
 
 [dev-dependencies]
 kaze-protocol = { path = "../kaze-protocol" }

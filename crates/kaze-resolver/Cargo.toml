@@ -4,14 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-clap = "4.5.26"
-serde = "1.0.217"
+clap = "4.5.30"
+serde = "1.0.218"
 tokio = "1.43.0"
-moka = { version = "0.12.8", features = ["future"] }
+moka = { version = "0.12.10", features = ["future"] }
 tracing = "0.1.41"
 tower = { version = "0.5.2", features = ["util"] }
-anyhow = "1.0.95"
-papaya = "0.1.8"
+anyhow = "1.0.96"
+papaya = "0.2.0"
 rand = "0.9.0"
 
 [dependencies.kaze-plugin]

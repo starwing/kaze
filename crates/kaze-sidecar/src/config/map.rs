@@ -4,7 +4,7 @@ use std::{
     ffi::OsString,
 };
 
-use serde::{Deserialize, Serialize};
+use kaze_plugin::serde::{Deserialize, Serialize};
 
 /// builder for ConfigMap
 pub struct ConfigBuilder {
@@ -124,6 +124,7 @@ mod tests {
     use super::*;
 
     #[derive(Deserialize, Serialize, clap::Args, Debug)]
+    #[serde(crate = "kaze_plugin::serde")]
     struct DatabaseConfig {
         #[arg(long, default_value = "localhost")]
         #[serde(default)]
@@ -135,6 +136,7 @@ mod tests {
     }
 
     #[derive(Deserialize, Serialize, clap::Args, Debug)]
+    #[serde(crate = "kaze_plugin::serde")]
     struct ServerConfig {
         #[arg(long, short, default_value = "0.0.0.0:8080")]
         #[serde(default)]

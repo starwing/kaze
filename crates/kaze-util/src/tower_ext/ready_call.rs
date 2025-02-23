@@ -1,17 +1,17 @@
 use std::{future::Future, task::ready};
 
+use pin_project::pin_project;
 use tower::Service;
 
-pin_project_lite::pin_project! {
-    pub struct ReadyCall<'a, S, T>
-    where
-        S: Service<T>,
-    {
-        service: &'a mut S,
-        req: Option<T>,
-        #[pin]
-        fut: Option<S::Future>,
-    }
+#[pin_project]
+pub struct ReadyCall<'a, S, T>
+where
+    S: Service<T>,
+{
+    service: &'a mut S,
+    req: Option<T>,
+    #[pin]
+    fut: Option<S::Future>,
 }
 
 impl<'a, S, T> ReadyCall<'a, S, T>

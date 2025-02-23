@@ -3,6 +3,7 @@ use std::task::Poll;
 use std::{pin::Pin, sync::Arc};
 
 use futures::{Sink, SinkExt};
+use pin_project::pin_project;
 use tower::Service;
 
 /// A `Service` that sends messages to a `Sink`.
@@ -70,12 +71,11 @@ where
     }
 }
 
-pin_project_lite::pin_project! {
-    pub struct SendFuture<S: Sink<Item>, Item> {
-        #[pin]
-        inner: Arc<std::sync::Mutex<S>>,
-        item: Option<Item>,
-    }
+#[pin_project]
+pub struct SendFuture<S: Sink<Item>, Item> {
+    #[pin]
+    inner: Arc<std::sync::Mutex<S>>,
+    item: Option<Item>,
 }
 
 impl<S: Sink<Item>, Item> SendFuture<S, Item> {

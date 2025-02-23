@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-anyhow = "1.0.95"
+anyhow = "1.0.96"
 tower = "0.5.2"
-clap = { version = "4.5.28", features = ["derive"] }
-serde = { version = "1.0.217", features = ["derive"] }
+clap = { version = "4.5.30", features = ["derive"] }
+serde = { version = "1.0.218", features = ["derive"] }
 kaze-protocol = { path = "../kaze-protocol" }
 kaze-util = { path = "../kaze-util" }
 clap-merge = { path = "../clap-merge" }

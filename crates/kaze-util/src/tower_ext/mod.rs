@@ -1,11 +1,13 @@
 mod chain_layer;
 mod chain_service;
+mod option_service;
 mod ready_call;
 mod service_cell;
 mod sink_service;
 
 pub use chain_layer::ChainLayer;
 pub use chain_service::Chain;
+pub use option_service::OptionService;
 pub use ready_call::ReadyCall;
 pub use service_cell::ServiceCell;
 pub use sink_service::SinkService;
