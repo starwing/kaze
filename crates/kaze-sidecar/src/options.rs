@@ -99,15 +99,14 @@ pub struct Options {
     /// resolver config
     #[command(flatten)]
     pub local: kaze_resolver::LocalOptions,
-    // TODO: add consul config
-    // /// location of consul server
-    // #[command(flatten)]
-    // pub consul: Option<ConsulConfig>,
 
-    // TODO: add prometheus config
-    // /// prometheus push gateway
-    // #[command(flatten)]
-    // pub prometheus: Option<PromethusConfig>,
+    /// location of consul server
+    #[command(flatten)]
+    pub consul: Option<ConsulConfig>,
+
+    /// prometheus push gateway
+    #[command(flatten)]
+    pub prometheus: Option<PromethusConfig>,
 }
 
 fn default_listen() -> String {

@@ -5,7 +5,7 @@ edition = "2024"
 build = "build.rs"
 
 [dependencies]
-anyhow = "1.0.96"
+anyhow = "1.0.97"
 lockfree-object-pool = "0.1.6"
 prost = "0.13.5"
 tokio-util = { version = "0.7.13", features = ["codec"] }
@@ -20,4 +20,4 @@ path = "../kaze-util"
 prost-build = "0.13.5"
 
 [dev-dependencies]
-tokio = { version = "1.43.0", features = ["rt-multi-thread", "time", "macros"] }
+tokio = { version = "1.44.0", features = ["rt-multi-thread", "time", "macros"] }

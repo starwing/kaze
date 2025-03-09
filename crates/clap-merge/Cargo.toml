@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-clap = "4.5.29"
+clap = "4.5.31"
 
 [dependencies.clap-merge-derive]
 path = "../clap-merge-derive"
 
 [dev-dependencies]
-clap = { version = "4.5.29", features = ["derive"] }
+clap = { version = "4.5.31", features = ["derive"] }
