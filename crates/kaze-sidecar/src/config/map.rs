@@ -6,26 +6,27 @@ use std::{
 
 use kaze_plugin::serde::{Deserialize, Serialize};
 
+type MergeTable = Vec<
+    Box<
+        dyn FnOnce(
+            &toml::Value,
+            &mut clap::ArgMatches,
+            &mut HashMap<TypeId, Box<dyn Any>>,
+        ) -> anyhow::Result<()>,
+    >,
+>;
+
 /// builder for ConfigMap
 pub struct ConfigBuilder {
-    content: toml::Value,
     map: HashMap<TypeId, Box<dyn Any>>,
-    mergers: Vec<
-        Box<
-            dyn FnOnce(
-                &mut clap::ArgMatches,
-                &mut HashMap<TypeId, Box<dyn Any>>,
-            ),
-        >,
-    >,
+    mergers: MergeTable,
     cmd: clap::Command,
 }
 
 impl ConfigBuilder {
     /// create a new ConfigBuilder
-    pub fn new(cmd: clap::Command, content: toml::Value) -> Self {
+    pub fn new(cmd: clap::Command) -> Self {
         Self {
-            content,
             cmd,
             mergers: Vec::new(),
             map: HashMap::new(),
@@ -37,68 +38,104 @@ impl ConfigBuilder {
         T: for<'a> Deserialize<'a> + Serialize + clap::Args + 'static,
     >(
         mut self,
-        table_name: &str,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        // if the table is not present, use the default value
-        let config = match self.content.get(table_name) {
-            Some(table) => T::deserialize(table.clone())?,
-            _ => default_from_clap(),
-        };
-
-        // box the config
-        let config = Box::new(config);
-        self.map.insert(TypeId::of::<T>(), config as Box<dyn Any>);
-        self.mergers.push(Box::new(|matches, map| {
-            if let Some(boxed) = map.get_mut(&TypeId::of::<T>()) {
-                if let Some(config) = boxed.downcast_mut::<T>() {
-                    config.update_from_arg_matches_mut(matches).unwrap();
-                }
-            }
-        }));
-
-        // update the args
+        name: &str,
+    ) -> Self {
+        // add flags from T to the command
         self.cmd = T::augment_args_for_update(self.cmd);
 
-        Ok(self)
+        // add a merger for this config table
+        let table_name = name.to_string();
+        self.mergers.push(Box::new(
+            |content, matches, map| -> anyhow::Result<()> {
+                // if the table is not present, use the default value
+                let config = match content.get(table_name) {
+                    Some(table) => T::deserialize(table.clone())?,
+                    _ => default_from_clap(),
+                };
+                // box the config
+                let config = Box::new(config);
+                if let Some(boxed) = map.get_mut(&TypeId::of::<T>()) {
+                    if let Some(config) = boxed.downcast_mut::<T>() {
+                        config.update_from_arg_matches_mut(matches).unwrap();
+                    }
+                }
+                map.insert(TypeId::of::<T>(), config as Box<dyn Any>);
+                Ok(())
+            },
+        ));
+
+        self
     }
 
     /// test the clap Args in builder valid.
-    #[cfg(test)]
     pub fn debug_assert(self) -> Self {
         self.cmd.clone().debug_assert();
         self
     }
 
-    /// build the ConfigMap
-    pub fn build(self) -> ConfigMap {
-        self.build_from(std::env::args_os())
+    /// get the ConfigMerger for the current command
+    pub fn get_matches(self) -> ConfigMerger {
+        Self::get_matches_from(self, std::env::args_os())
     }
 
-    /// build the ConfigMap from custom args
-    pub fn build_from<I, T>(mut self, itr: I) -> ConfigMap
+    /// get the ConfigMerger for the current command
+    pub fn get_matches_from<I, T>(self, itr: I) -> ConfigMerger
     where
         I: IntoIterator<Item = T>,
         T: Into<OsString> + Clone,
     {
-        self.cmd.print_help().unwrap();
-        let mut matches = self.cmd.get_matches_from(itr);
-
-        // update the structs from the matches
-        for merger in self.mergers.drain(..) {
-            merger(&mut matches, &mut self.map);
-        }
-
-        // build the ConfigMap
-        ConfigMap::new(self.map)
+        ConfigMerger::new(
+            self.map,
+            self.mergers,
+            self.cmd.get_matches_from(itr),
+        )
     }
 }
 
 fn default_from_clap<T: clap::Args>() -> T {
     let mut cmd = clap::Command::new("__dummy__");
     cmd = T::augment_args(cmd);
-    let mut matches = cmd.get_matches_from(vec!["__dummy__"]);
-    T::from_arg_matches_mut(&mut matches)
+    let matches = cmd.get_matches_from(vec!["__dummy__"]);
+    T::from_arg_matches(&matches)
         .expect("Failed to get default config from clap")
+}
+
+/// ConfigMerger is a helper struct for building a ConfigMap from a clap::ArgMatches
+pub struct ConfigMerger {
+    map: HashMap<TypeId, Box<dyn Any>>,
+    mergers: MergeTable,
+    matches: clap::ArgMatches,
+}
+
+impl ConfigMerger {
+    /// create a new ConfigMerger
+    pub fn new(
+        map: HashMap<TypeId, Box<dyn Any>>,
+        mergers: MergeTable,
+        matches: clap::ArgMatches,
+    ) -> Self {
+        Self {
+            map,
+            mergers,
+            matches,
+        }
+    }
+
+    /// get the arg matches
+    pub fn arg_matches(&self) -> &clap::ArgMatches {
+        &self.matches
+    }
+
+    /// build the ConfigMap from custom args
+    pub fn build(mut self, content: toml::Value) -> anyhow::Result<ConfigMap> {
+        // update the structs from the matches
+        for merger in self.mergers.drain(..) {
+            merger(&content, &mut self.matches, &mut self.map)?;
+        }
+
+        // build the ConfigMap
+        Ok(ConfigMap::new(self.map))
+    }
 }
 
 /// ConfigMap stores the parsed config
@@ -116,6 +153,13 @@ impl ConfigMap {
         self.map
             .get(&TypeId::of::<T>())
             .and_then(|x| x.downcast_ref::<T>())
+    }
+
+    /// take the config
+    pub fn take<T: Any>(&mut self) -> Option<Box<T>> {
+        self.map
+            .remove(&TypeId::of::<T>())
+            .and_then(|x| x.downcast::<T>().ok())
     }
 }
 
@@ -162,13 +206,13 @@ mod tests {
         )
         .unwrap();
         let args = vec!["test", "--timeout", "20"];
-        let config_map = ConfigBuilder::new(clap::Command::new("test"), value)
+        let config_map = ConfigBuilder::new(clap::Command::new("test"))
             .add::<DatabaseConfig>("database")
-            .unwrap()
             .add::<ServerConfig>("server")
-            .unwrap()
             .debug_assert()
-            .build_from(args);
+            .get_matches_from(args)
+            .build(value)
+            .unwrap();
 
         assert_eq!(
             config_map.get::<DatabaseConfig>().unwrap().host,

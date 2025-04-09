@@ -1,2 +1,6 @@
 target
 sidecar/logs
+*.gcda
+*.gcno
+*.dSYM
+test.*

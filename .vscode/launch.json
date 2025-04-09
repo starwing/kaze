@@ -7,6 +7,14 @@
         {
             "type": "lldb",
             "request": "launch",
+            "name": "kaze_core test1 (lldb)",
+            "program": "${workspaceFolder}/crates/kaze-core/test",
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
             "name": "Debug executable 'meshcli'",
             "cargo": {
                 "args": [

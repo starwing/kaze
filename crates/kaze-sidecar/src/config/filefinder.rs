@@ -8,6 +8,7 @@ use super::merge;
 pub struct ConfigFileBuilder {
     names: Vec<String>,
     paths: Vec<PathBuf>,
+    files: Vec<PathBuf>,
 }
 
 impl ConfigFileBuilder {
@@ -15,10 +16,17 @@ impl ConfigFileBuilder {
         Self {
             names: Vec::new(),
             paths: Vec::new(),
+            files: Vec::new(),
         }
     }
 
-    pub fn default(name: String) -> Self {
+    pub fn default() -> Self {
+        let mut name = "kaze".to_string();
+        if let Ok(binpath) = std::env::current_exe() {
+            if let Some(stem) = binpath.file_stem() {
+                name = stem.to_string_lossy().to_string();
+            }
+        }
         Self::new()
             .add_homeconfig()
             .add_cwd()
@@ -60,6 +68,21 @@ impl ConfigFileBuilder {
         self
     }
 
+    pub fn add_file(mut self, file: PathBuf) -> Self {
+        if file == PathBuf::from("") {
+            return self;
+        }
+        if !file.is_file() {
+            warn!("File not exists: {:?}", file);
+            return self;
+        }
+        if let Some(idx) = self.files.iter().position(|p| p == &file) {
+            self.files.remove(idx);
+        }
+        self.files.push(file);
+        self
+    }
+
     pub fn add_homeconfig(self) -> Self {
         if let Some(dir) = dirs::config_dir() {
             return self.add_path(dir);
@@ -92,10 +115,19 @@ impl ConfigFileBuilder {
                         .context("Failed to read file")?;
                     let current = toml::from_str(&content)
                         .context("Failed to parse file")?;
+                    // TODO: record which config from which file
                     value = merge::merge(value, current)
                         .context("Failed to merge file")?;
                 }
             }
+        }
+        for file in &self.files {
+            let content = std::fs::read_to_string(file)
+                .context("Failed to read file")?;
+            let current =
+                toml::from_str(&content).context("Failed to parse file")?;
+            value = merge::merge(value, current)
+                .context("Failed to merge file")?;
         }
         Ok(value)
     }

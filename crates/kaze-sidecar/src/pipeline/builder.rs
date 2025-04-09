@@ -5,17 +5,17 @@ mod tests {
     use kaze_plugin::PipelineService;
     use scopeguard::defer;
     use tokio::sync::Notify;
-    use tower::{ServiceBuilder, util::BoxCloneSyncService};
+    use tower::{util::BoxCloneSyncService, ServiceBuilder};
 
     use crate::plugins::{corral, ratelimit, tracker::RpcTracker};
-    use kaze_plugin::PipelineRequired;
     use kaze_plugin::protocol::{
-        packet::{Packet, new_bytes_pool},
+        packet::{new_bytes_pool, Packet},
         proto::Hdr,
         service::{SinkMessage, ToMessageService},
     };
     use kaze_plugin::util::tower_ext::ChainLayer;
     use kaze_plugin::util::tower_ext::ServiceExt as _;
+    use kaze_plugin::PipelineRequired;
     use kaze_resolver::dispatch_service;
 
     #[tokio::test]
@@ -31,7 +31,7 @@ mod tests {
             kaze_edge::Edge::unlink(prefix, ident).unwrap();
         }
         let edge = dbg!(edge).build().unwrap();
-        let (tx, _rx) = edge.split();
+        let (tx, _rx) = edge.into_split();
 
         let pool = new_bytes_pool();
         let resolver = Arc::new(kaze_resolver::local::Local::new());

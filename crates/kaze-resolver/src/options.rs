@@ -12,6 +12,7 @@ use kaze_plugin::{
 
 use crate::{Resolver, cached::Cached, local::Local};
 
+/// local resolver configurations
 #[derive(ClapMerge, Args, Serialize, Deserialize, Clone, Debug)]
 #[command(next_help_heading = "Local resolver configurations")]
 pub struct Options {

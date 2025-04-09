@@ -10,7 +10,7 @@ use kaze_plugin::util::parser;
 
 use super::corral::Corral;
 
-/// options for corral
+/// corral configurations
 #[derive(ClapMerge, Args, Serialize, Deserialize, Clone, Debug)]
 #[serde(crate = "kaze_plugin::serde")]
 #[command(next_help_heading = "Corral configurations")]

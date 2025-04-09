@@ -1,0 +1,33 @@
+{
+    "configurations": [
+        {
+            "name": "MacClang",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "/Users/sw/Work/Local/include",
+                "/opt/homebrew/include",
+                //"/Library/Developer/CommandLineTools/usr/lib/clang/*/include",
+                "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include",
+                "/Library/Developer/CommandLineTools/usr/include"
+            ],
+            "defines": [
+                "KZ_IMPLEMENTATION",
+                "_POSIX_C_SOURCE=200809L"
+            ],
+            "macFrameworkPath": [
+                "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks"
+            ],
+            "compilerArgs": [
+                "-pedantic",
+                "-Wall",
+                "-Wextra",
+                "-std=c89"
+            ],
+            "compilerPath": "/usr/bin/clang",
+            "cStandard": "c17",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "macos-clang-arm64"
+        }
+    ],
+    "version": 4
+}

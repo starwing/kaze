@@ -1,212 +1,134 @@
-use std::{borrow::Cow, net::Ipv4Addr, ptr::addr_of_mut, sync::Arc};
+use std::{borrow::Cow, net::Ipv4Addr, sync::Arc};
 
 use anyhow::{Context, Result, bail};
 use metrics::counter;
 use tokio::{sync::Mutex, task::block_in_place};
 use tower::{Layer, layer::layer_fn, service_fn};
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
-use kaze_core::{self, KazeState};
+use kaze_core::{Channel, OwnedWriteHalf};
 use kaze_protocol::{
-    bytes::{Buf, BufMut},
-    message::Message,
-    packet::BytesPool,
-    service::MessageService,
+    bytes::Buf, message::Message, packet::BytesPool, service::MessageService,
 };
 use kaze_util::tower_ext::ServiceExt as _;
 
+pub use kaze_core::Error;
+pub use kaze_core::OwnedReadHalf as Receiver;
+
 pub struct Edge {
-    cq: KazeState, // completion queue
-    sq: KazeState, // submission queue
+    channel: Channel,
+    ident: Ipv4Addr,
 }
 
 impl std::fmt::Display for Edge {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Edge")
-            .field("sq", &self.sq.name())
-            .field("cq", &self.cq.name())
+            .field("channel", &self.channel)
             .finish()
     }
 }
 
 impl Edge {
-    pub fn cq_name(&self) -> Cow<'_, str> {
-        self.cq.name()
-    }
-    pub fn sq_name(&self) -> Cow<'_, str> {
-        self.sq.name()
-    }
-    pub fn split(self) -> (Sender, Receiver) {
-        (Sender::new(self.sq), Receiver::new(self.cq))
-    }
-
-    pub(crate) fn new_kaze_pair(
+    pub(crate) fn new(
         prefix: impl AsRef<str>,
         ident: Ipv4Addr,
-        sq_bufsize: usize,
-        cq_bufsize: usize,
+        bufsize: usize,
         unlink: bool,
     ) -> Result<Self> {
-        let (sq_name, cq_name) = Self::get_kaze_pair_names(prefix, ident);
+        let name = Self::get_channel_name(prefix, ident);
 
-        if KazeState::exists(&sq_name).context("Failed to check shm queue")? {
+        if let Some((owner, user)) =
+            Channel::exists(&name).context("Failed to check shm queue")?
+        {
             if !unlink {
-                let sq = KazeState::open(&sq_name)
-                    .context("Failed to open submission queue")?;
-                let (sender, receiver) = sq.owner();
                 bail!(
-                    "shm queue {} already exists, previous kaze sender={} receiver={}",
-                    sq_name,
-                    sender,
-                    receiver
+                    "shm queue {} already exists, previous channel owner={} user={}",
+                    name,
+                    owner,
+                    user,
                 );
-            } else {
-                if let Err(e) = KazeState::unlink(&sq_name) {
-                    warn!(error = %e, "Failed to unlink submission queue");
-                }
-                if let Err(e) = KazeState::unlink(&cq_name) {
-                    warn!(error = %e, "Failed to unlink completion queue");
-                }
+            } else if let Err(e) = Channel::unlink(&name) {
+                warn!(error = %e, "Failed to unlink channel");
             }
         }
 
-        let ident = ident.to_bits();
         let page_size = page_size::get();
-        let sq_bufsize = KazeState::aligned_bufsize(sq_bufsize, page_size);
-        let cq_bufsize = KazeState::aligned_bufsize(cq_bufsize, page_size);
-        let mut sq = KazeState::new(&sq_name, ident, sq_bufsize)
+        let bufsize = Channel::aligned(bufsize, page_size);
+        let channel = Channel::create(&name, bufsize)
             .context("Failed to create submission queue")?;
-        let mut cq = KazeState::new(&cq_name, ident, cq_bufsize)
-            .context("Failed to create completion queue")?;
-        sq.set_owner(Some(sq.pid()), None);
-        cq.set_owner(None, Some(cq.pid()));
-        Ok(Self { cq, sq })
+        Ok(Self { channel, ident })
+    }
+
+    /// Get the channel name.
+    pub fn name(&self) -> Cow<'_, str> {
+        self.channel.name()
+    }
+
+    /// Get the channel ident.
+    pub fn ident(&self) -> Ipv4Addr {
+        self.ident
+    }
+
+    pub fn into_split(self) -> (Sender, Receiver) {
+        let (rx, tx) = self.channel.into_split();
+        (Sender::new(tx, self.ident), rx)
     }
 
     pub fn unlink(prefix: impl AsRef<str>, ident: Ipv4Addr) -> Result<()> {
-        let (sq_name, cq_name) = Self::get_kaze_pair_names(prefix, ident);
-        info!("unlink submission queue: {}", sq_name);
-        KazeState::unlink(&sq_name)
-            .context("Failed to unlink submission queue")?;
-        info!("unlink completion queue: {}", cq_name);
-        KazeState::unlink(&cq_name)
-            .context("Failed to unlink completion queue")?;
-        Ok(())
+        let name = Self::get_channel_name(prefix, ident);
+        info!("unlink queue: {}", name);
+        Channel::unlink(&name).context("Failed to unlink completion queue")
     }
 
-    fn get_kaze_pair_names(
-        prefix: impl AsRef<str>,
-        ident: Ipv4Addr,
-    ) -> (String, String) {
-        let addr = ident.to_string();
-        let sq_name = format!("{}_sq_{}", prefix.as_ref(), addr);
-        let cq_name = format!("{}_cq_{}", prefix.as_ref(), addr);
-        (sq_name, cq_name)
+    fn get_channel_name(prefix: impl AsRef<str>, ident: Ipv4Addr) -> String {
+        format!("{}_{}", prefix.as_ref(), ident.to_string())
     }
 }
 
-pub struct Receiver {
-    cq: KazeState,
-}
-
-impl Receiver {
-    fn new(cq: KazeState) -> Self {
-        Self { cq }
-    }
-
-    pub fn lock(&self) -> kaze_core::Guard {
-        self.cq.lock()
-    }
-
-    pub async fn recv<'a>(
-        &'a mut self,
-    ) -> Result<Option<kaze_core::PopContext<'a>>> {
-        let raw_self = addr_of_mut!(*self);
-        // SAFETY: the WouldBlock branch is not borrow self, but the borrow checker
-        // cannot detect it. Use `addr_of_mut!` to bypass the borrow checker.
-        //
-        // See also:
-        // https://stackoverflow.com/questions/58295535
-        match unsafe { (*raw_self).cq.try_pop() } {
-            Ok(ctx) => return Ok(Some(ctx)),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                counter!("kaze_pop_blocking_total").increment(1);
-                self.block_recv()
-            }
-            Err(e) => {
-                counter!("kaze_pop_errors_total").increment(1);
-                error!(error = %e, "Error reading from kaze");
-                return Err(e.into());
-            }
-        }
-    }
-
-    fn block_recv(&mut self) -> Result<Option<kaze_core::PopContext<'_>>> {
-        match block_in_place(|| self.cq.pop()) {
-            Ok(ctx) => Ok(Some(ctx)),
-            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
-                info!("completion queue closed");
-                return Ok(None);
-            }
-            Err(e) => {
-                counter!("kaze_pop_blocking_errors_total").increment(1);
-                error!(error = %e, "Error reading from blocking kaze");
-                return Err(e.into());
-            }
-        }
-    }
-}
-
+#[derive(Clone)]
 pub struct Sender {
-    sq: Arc<Mutex<KazeState>>,
-}
-
-impl Clone for Sender {
-    fn clone(&self) -> Self {
-        Self {
-            sq: self.sq.clone(),
-        }
-    }
+    tx: Arc<Mutex<OwnedWriteHalf>>,
+    ident: Ipv4Addr,
 }
 
 impl Sender {
-    fn new(sq: KazeState) -> Self {
+    fn new(tx: OwnedWriteHalf, ident: Ipv4Addr) -> Self {
         Self {
-            sq: Arc::new(Mutex::new(sq)),
+            tx: Arc::new(Mutex::new(tx)),
+            ident,
         }
     }
 
     pub async fn ident(&self) -> u32 {
-        self.sq.lock().await.ident()
+        self.ident.to_bits()
     }
 
-    pub async fn lock(&self) -> kaze_core::Guard {
-        self.sq.lock().await.lock()
+    pub async fn lock(&self) -> kaze_core::ShutdownGuard {
+        self.tx.lock().await.shutdown_lock()
     }
 
-    pub async fn send_buf(&self, buf: impl Buf) -> Result<()> {
-        let mut sq = self.sq.lock().await;
-        let mut ctx = match sq.try_push(buf.remaining()) {
-            Ok(ctx) => ctx,
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                counter!("kaze_push_blocking_total").increment(1);
-                block_in_place(|| sq.push(buf.remaining()))
-                    .map_err(|e| {
-                        counter!("kaze_push_blocking_errors_total")
-                            .increment(1);
-                        e
-                    })
-                    .context("kaze blocking push error")?
-            }
-            Err(e) => {
-                counter!("kaze_push_errors_total").increment(1);
-                return Err(e).context("kaze push error");
-            }
-        };
-        let len = buf.remaining() as usize;
-        let mut dst = ctx.buffer_mut();
-        dst.put(buf);
-        ctx.commit(len)?;
+    pub async fn send_buf(&self, data: impl Buf) -> Result<()> {
+        let tx = self.tx.lock().await;
+        let mut ctx = tx
+            .write_context(data.remaining())
+            .context("Failed to create write context")?;
+        if ctx.would_block() {
+            counter!("kaze_submission_blocking_total").increment(1);
+            block_in_place(|| ctx.wait())
+                .map_err(|e| {
+                    counter!("kaze_submission_blocking_errors_total")
+                        .increment(1);
+                    e
+                })
+                .context("kaze blocking wait submission error")?;
+        }
+        let len = ctx
+            .write(data)
+            .map_err(|e| {
+                counter!("kaze_submission_errors_total").increment(1);
+                e
+            })
+            .context("kaze submission error")?;
         counter!("kaze_submission_packets_total").increment(1);
         counter!("kaze_submission_bytes_total").increment(len as u64);
         Ok(())
@@ -259,7 +181,7 @@ mod tests {
     #[test]
     fn test_send() {
         let edge = Options::default().build().unwrap();
-        let (tx, _rx) = edge.split();
+        let (tx, _rx) = edge.into_split();
         let pool = new_bytes_pool();
         tx.clone().service(pool.clone()).boxed();
 

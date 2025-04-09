@@ -9,6 +9,7 @@ use kaze_plugin::{
 
 use super::RateLimit;
 
+/// rate limit configurations
 #[derive(ClapMerge, Args, Serialize, Deserialize, Clone, Debug)]
 #[serde(crate = "kaze_plugin::serde")]
 #[command(next_help_heading = "Rate limit configurations")]
