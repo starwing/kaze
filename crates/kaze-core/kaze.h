@@ -51,27 +51,27 @@
 #elif defined(__SUNPRO_C) && __SUNPRO_C >= 0x420
 # include <sys/inttypes.h>
 #else
-  typedef unsigned int uint32_t;
-  typedef signed int   int32_t;
+    typedef unsigned int uint32_t;
+    typedef signed int   int32_t;
 # if defined(S_SPLINT_S)
-   typedef long long int64_t;
-   typedef unsigned long long uint64_t;
+    typedef long long int64_t;
+    typedef unsigned long long uint64_t;
 # elif defined(__GNUC__) && !defined(vxWorks)
-   __extension__ typedef long long int64_t;
-   __extension__ typedef unsigned long long uint64_t;
+    __extension__ typedef long long int64_t;
+    __extension__ typedef unsigned long long uint64_t;
 # elif defined(__MWERKS__) || defined (__SUNPRO_C) || defined (__SUNPRO_CC) \
        || defined (__APPLE_CC__) || defined (_LONG_LONG) || defined (_CRAYC) \
        || defined (S_SPLINT_S)
-   typedef long long int64_t;
-   typedef unsigned long long uint64_t;
+    typedef long long int64_t;
+    typedef unsigned long long uint64_t;
 # elif (defined(__WATCOMC__) && defined(__WATCOM_INT64__)) \
        || (defined(_MSC_VER) && _INTEGRAL_MAX_BITS >= 64) \
        || (defined (__BORLANDC__) && __BORLANDC__ > 0x460) \
        || defined (__alpha) || defined (__DECC)
-   typedef __int64 int64_t;
-   typedef unsigned __int64 uint64_t;
+    typedef __int64 int64_t;
+    typedef unsigned __int64 uint64_t;
 # else
-#  error "No 64-bit integer type available"
+#   error "No 64-bit integer type available"
 # endif
 #endif
 
@@ -157,8 +157,9 @@ struct kz_Context {
 };
 
 
-KZ_NS_END /* clang-format on */
-#endif    /* _kaze_h_ */
+KZ_NS_END
+
+#endif    /* _kaze_h_ clang-format on */
 
 #if defined(KZ_IMPLEMENTATION) && !defined(kz_implemented)
 #define kz_implemented
@@ -620,15 +621,14 @@ static int kz_pidexists(int pid) {
 static int kz_mapshm(kz_State *S) {
     struct stat statbuf;
 
-    if (fstat(S->shm_fd, &statbuf) == -1) return kz_initfail(S);
-    if (statbuf.st_size == 0) return errno = ENOENT, kz_initfail(S);
+    if (fstat(S->shm_fd, &statbuf) == -1) return KZ_FAIL;
+    if (statbuf.st_size == 0) return (errno = ENOENT), KZ_FAIL;
 
     S->shm_size = statbuf.st_size;
     S->hdr = (kz_ShmHdr *)mmap(
             NULL, S->shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, S->shm_fd,
             0);
-    if (S->hdr == MAP_FAILED) return kz_initfail(S);
-    return KZ_OK;
+    return S->hdr == MAP_FAILED ? KZ_FAIL : KZ_OK;
 }
 
 static int kz_createshm(kz_State *S, int flags) {
@@ -654,7 +654,7 @@ static int kz_createshm(kz_State *S, int flags) {
         return kz_initfail(S);
     if ((flags & KZ_RESET)) created = 1;
 
-    if (kz_mapshm(S) != KZ_OK) return KZ_FAIL;
+    if (kz_mapshm(S) != KZ_OK) return kz_initfail(S);
     if (created) {
         memset(S->hdr, 0, sizeof(kz_ShmHdr));
         S->hdr->size = S->shm_size;
@@ -670,7 +670,7 @@ static int kz_createshm(kz_State *S, int flags) {
 static int kz_openshm(kz_State *S) {
     S->shm_fd = shm_open(S->name_buf, O_RDWR, 0666);
     if (S->shm_fd == -1) return kz_initfail(S);
-    if (kz_mapshm(S) != KZ_OK) return KZ_FAIL;
+    if (kz_mapshm(S) != KZ_OK) return kz_initfail(S);
     if (S->shm_size != S->hdr->size) return errno = EBADF, kz_initfail(S);
     if (S->hdr->user_pid != 0 && (int)S->hdr->user_pid != S->self_pid
         && kz_pidexists(S->hdr->user_pid))
@@ -681,8 +681,9 @@ static int kz_openshm(kz_State *S) {
 KZ_API int kz_exists(const char *name, int *powner, int *puser) {
     kz_State S;
     S.shm_fd = shm_open(name, O_RDWR, 0666);
+    S.hdr = NULL;
     if (S.shm_fd < 0) return errno == ENOENT ? 0 : KZ_FAIL;
-    if (kz_mapshm(&S) != KZ_OK) return KZ_FAIL;
+    if (kz_mapshm(&S) != KZ_OK) return close(S.shm_fd), KZ_FAIL;
     if (powner) *powner = S.hdr->owner_pid;
     if (puser) *puser = S.hdr->user_pid;
     return close(S.shm_fd), 1;

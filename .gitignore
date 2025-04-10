@@ -4,3 +4,5 @@ sidecar/logs
 *.gcno
 *.dSYM
 test.*
+*.so
+*.o
