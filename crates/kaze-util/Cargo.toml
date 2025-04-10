@@ -4,21 +4,21 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-tokio = { version = "1.44.0", features = ["sync", "macros", "rt"] }
-tokio-util = { version = "0.7.13", features = ["time"] }
 anyhow = "1.0.97"
 duration-string = { version = "0.5.2", features = ["serde"] }
 futures = "0.3.31"
 parking_lot = "0.12.3"
 pin-project = "1.1.10"
+tokio = { version = "1.44.2", features = ["sync", "macros", "rt"] }
+tokio-util = { version = "0.7.14", features = ["time"] }
 tower = { version = "0.5.2", features = ["util"] }
 
 [dev-dependencies]
+futures-test = "0.3.31"
 kaze-protocol = { path = "../kaze-protocol" }
-tokio = { version = "1.44.0", features = [
+tokio = { version = "1.44.2", features = [
     "macros",
     "time",
     "io-util",
     "rt-multi-thread",
 ] }
-futures-test = "0.3.31"

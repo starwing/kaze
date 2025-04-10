@@ -6,7 +6,7 @@ use std::{
 use kaze_plugin::{
     clap::Args,
     serde::{Deserialize, Serialize},
-    util::DurationString,
+    util::parser::DurationString,
 };
 
 use crate::{Resolver, cached::Cached, local::Local};

@@ -1,8 +1,10 @@
 use std::net::SocketAddr;
 
-use kaze_plugin::clap::Args;
-use kaze_plugin::serde::{Deserialize, Serialize};
-use kaze_plugin::util::DurationString;
+use kaze_plugin::{
+    clap::Args,
+    serde::{Deserialize, Serialize},
+    util::parser::DurationString,
+};
 
 /// prometheus push gateway configuration
 #[derive(Args, Serialize, Deserialize, Clone, Debug)]

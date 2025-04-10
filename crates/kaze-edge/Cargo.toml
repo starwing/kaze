@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.97"
 metrics = "0.24.1"
-tokio = { version = "1.44.0", features = ["rt-multi-thread"] }
+tokio = { version = "1.44.2", features = ["rt-multi-thread"] }
 tracing = "0.1.41"
 page_size = "0.6.0"
 tower = "0.5.2"
@@ -21,5 +21,5 @@ path = "../kaze-core"
 path = "../kaze-protocol"
 
 [dev-dependencies.tokio]
-version = "1.44.0"
+version = "1.44.2"
 features = ["time", "macros", "rt-multi-thread"]

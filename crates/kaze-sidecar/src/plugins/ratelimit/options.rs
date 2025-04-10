@@ -3,7 +3,7 @@ use std::{net::Ipv4Addr, str::FromStr, sync::Arc};
 use kaze_plugin::{
     clap::Args,
     serde::{Deserialize, Serialize},
-    util::DurationString,
+    util::parser::DurationString,
 };
 
 use super::RateLimit;

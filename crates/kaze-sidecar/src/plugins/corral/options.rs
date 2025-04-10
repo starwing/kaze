@@ -1,11 +1,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use kaze_plugin::clap::Args;
-use kaze_plugin::protocol::packet::BytesPool;
-use kaze_plugin::serde::{Deserialize, Serialize};
-use kaze_plugin::util::parser;
-use kaze_plugin::util::DurationString;
+use kaze_plugin::{
+    clap::Args,
+    protocol::packet::BytesPool,
+    serde::{Deserialize, Serialize},
+    util::parser::{self, DurationString},
+};
 
 use super::corral::Corral;
 

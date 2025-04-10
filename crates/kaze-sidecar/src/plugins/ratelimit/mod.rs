@@ -6,7 +6,7 @@ use tower::service_fn;
 
 use kaze_plugin::{
     protocol::{message::Message, service::MessageService},
-    util::DurationString,
+    util::parser::DurationString,
 };
 
 pub use options::Options;

@@ -5,43 +5,34 @@ edition = "2021"
 
 [dependencies]
 anyhow = { version = "1.0.97", features = ["backtrace"] }
-tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-tracing-appender = "0.2.3"
 bugreport = "0.5.1"
+clap = { version = "4.5.35", features = ["cargo", "derive", "string"] }
+dirs = "6.0.0"
+futures = "0.3.31"
+leaky-bucket = "1.1.2"
+lru = "0.13.0"
 metrics = "0.24.1"
+metrics-exporter-prometheus = { version = "0.16.2", features = [
+    "http-listener",
+    "push-gateway",
+    "tokio",
+    "tracing",
+] }
+papaya = "0.2.1"
+scopeguard = "1.2.0"
+thingbuf = "0.1.6"
+tokio = { version = "1.44.2", features = ["full"] }
+tokio-stream = "0.1.17"
+tokio-util = "0.7.14"
 toml = "0.8.20"
 tower = "0.5.2"
-leaky-bucket = "1.1.2"
-futures = "0.3.31"
-tokio-util = "0.7.13"
-thingbuf = "0.1.6"
-papaya = "0.2.0"
-lru = "0.13.0"
-tokio-stream = "0.1.17"
-scopeguard = "1.2.0"
-dirs = "6.0.0"
+tracing = "0.1.41"
+tracing-appender = "0.2.3"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 
-[dependencies.kaze-plugin]
-path = "../kaze-plugin"
-
-[dependencies.kaze-edge]
-path = "../kaze-edge"
-
-[dependencies.kaze-resolver]
-path = "../kaze-resolver"
-
-[dependencies.tokio]
-version = "1.44.0"
-features = ["full"]
-
-[dependencies.clap]
-version = "4.5.31"
-features = ["cargo", "derive", "string"]
-
-[dependencies.metrics-exporter-prometheus]
-version = "0.16.2"
-features = ["http-listener", "push-gateway", "tokio", "tracing"]
+kaze-plugin = { path = "../kaze-plugin" }
+kaze-edge = { path = "../kaze-edge" }
+kaze-resolver = { path = "../kaze-resolver" }
 
 [dev-dependencies]
 scopeguard = "1.2.0"
