@@ -2,16 +2,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use kaze_plugin::clap::Args;
-use kaze_plugin::clap_merge::ClapMerge;
 use kaze_plugin::protocol::packet::BytesPool;
 use kaze_plugin::serde::{Deserialize, Serialize};
-use kaze_plugin::util::DurationString;
 use kaze_plugin::util::parser;
+use kaze_plugin::util::DurationString;
 
 use super::corral::Corral;
 
 /// corral configurations
-#[derive(ClapMerge, Args, Serialize, Deserialize, Clone, Debug)]
+#[derive(Args, Serialize, Deserialize, Clone, Debug)]
 #[serde(crate = "kaze_plugin::serde")]
 #[command(next_help_heading = "Corral configurations")]
 #[group(id = "CorralOptions")]

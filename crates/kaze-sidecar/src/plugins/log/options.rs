@@ -2,13 +2,12 @@ use std::path::PathBuf;
 
 use anyhow::Context as _;
 use kaze_plugin::clap::Args;
-use kaze_plugin::clap_merge::ClapMerge;
 use kaze_plugin::serde::{Deserialize, Serialize};
 use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
 use tracing_appender::rolling::Rotation;
 
 /// log file configuration
-#[derive(ClapMerge, Args, Serialize, Deserialize, Clone, Debug)]
+#[derive(Args, Serialize, Deserialize, Clone, Debug)]
 #[serde(crate = "kaze_plugin::serde")]
 #[command(next_help_heading = "Log file configurations")]
 pub struct Options {
@@ -66,7 +65,7 @@ fn parse_rotation(s: &str) -> anyhow::Result<Rotation> {
 }
 
 mod serde_rotation {
-    use kaze_plugin::serde::{self, Deserializer, Serializer, de::Visitor};
+    use kaze_plugin::serde::{self, de::Visitor, Deserializer, Serializer};
     use tracing_appender::rolling::Rotation;
 
     pub fn serialize<S>(

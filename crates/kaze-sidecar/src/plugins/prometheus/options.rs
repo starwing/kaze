@@ -1,12 +1,11 @@
 use std::net::SocketAddr;
 
 use kaze_plugin::clap::Args;
-use kaze_plugin::clap_merge::ClapMerge;
 use kaze_plugin::serde::{Deserialize, Serialize};
 use kaze_plugin::util::DurationString;
 
 /// prometheus push gateway configuration
-#[derive(ClapMerge, Args, Serialize, Deserialize, Clone, Debug)]
+#[derive(Args, Serialize, Deserialize, Clone, Debug)]
 #[serde(crate = "kaze_plugin::serde")]
 #[command(next_help_heading = "Prometheus metrics configurations")]
 pub struct Options {

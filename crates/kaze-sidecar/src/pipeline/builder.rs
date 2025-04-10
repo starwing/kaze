@@ -2,7 +2,7 @@
 mod tests {
     use std::sync::Arc;
 
-    use kaze_plugin::PipelineService;
+    use kaze_plugin::{default_from_clap, PipelineService};
     use scopeguard::defer;
     use tokio::sync::Notify;
     use tower::{util::BoxCloneSyncService, ServiceBuilder};
@@ -24,7 +24,7 @@ mod tests {
             name: "sidecar_test".to_string(),
             ident: "127.0.0.1".parse().unwrap(),
             unlink: true,
-            ..kaze_edge::Options::default()
+            ..default_from_clap()
         };
         let (prefix, ident) = (edge.name.clone(), edge.ident);
         defer! {
@@ -35,8 +35,9 @@ mod tests {
 
         let pool = new_bytes_pool();
         let resolver = Arc::new(kaze_resolver::local::Local::new());
-        let ratelimit = ratelimit::Options::default().build();
-        let corral = corral::Options::default().build(pool.clone());
+        let ratelimit = default_from_clap::<ratelimit::Options>().build();
+        let corral =
+            default_from_clap::<corral::Options>().build(pool.clone());
         let tracker = RpcTracker::new(10, Notify::new());
 
         let sink = ServiceBuilder::new()

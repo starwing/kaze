@@ -109,13 +109,14 @@ struct LimitKey(Option<u32>, Option<String>);
 
 #[cfg(test)]
 mod tests {
+    use kaze_plugin::default_from_clap;
     use tower::ServiceExt as _;
 
     use super::*;
 
     #[test]
     fn test_send() {
-        let rl = Options::default().build();
+        let rl = default_from_clap::<Options>().build();
         rl.service().boxed();
     }
 }

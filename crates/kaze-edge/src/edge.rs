@@ -1,19 +1,20 @@
 use std::{borrow::Cow, net::Ipv4Addr, sync::Arc};
 
 use anyhow::{Context, Result, bail};
+use kaze_core::bytes::BufMut;
+use kaze_protocol::packet::Packet;
 use metrics::counter;
 use tokio::{sync::Mutex, task::block_in_place};
 use tower::{Layer, layer::layer_fn, service_fn};
 use tracing::{info, warn};
 
-use kaze_core::{Channel, OwnedWriteHalf};
-use kaze_protocol::{
+use kaze_core::{Channel, OwnedReadHalf, OwnedWriteHalf};
+use kaze_plugin::protocol::{
     bytes::Buf, message::Message, packet::BytesPool, service::MessageService,
 };
-use kaze_util::tower_ext::ServiceExt as _;
+use kaze_plugin::util::tower_ext::ServiceExt as _;
 
 pub use kaze_core::Error;
-pub use kaze_core::OwnedReadHalf as Receiver;
 
 pub struct Edge {
     channel: Channel,
@@ -71,7 +72,7 @@ impl Edge {
 
     pub fn into_split(self) -> (Sender, Receiver) {
         let (rx, tx) = self.channel.into_split();
-        (Sender::new(tx, self.ident), rx)
+        (Sender::new(tx, self.ident), Receiver::new(rx))
     }
 
     pub fn unlink(prefix: impl AsRef<str>, ident: Ipv4Addr) -> Result<()> {
@@ -82,6 +83,51 @@ impl Edge {
 
     fn get_channel_name(prefix: impl AsRef<str>, ident: Ipv4Addr) -> String {
         format!("{}_{}", prefix.as_ref(), ident.to_string())
+    }
+}
+
+pub struct Receiver {
+    rx: OwnedReadHalf,
+}
+
+impl Receiver {
+    pub fn new(rx: OwnedReadHalf) -> Self {
+        Self { rx }
+    }
+
+    pub async fn read_packet(&mut self, pool: &BytesPool) -> Result<Packet> {
+        let mut ctx = self
+            .rx
+            .read_context()
+            .context("Failed to create read context")?;
+        if ctx.would_block() {
+            counter!("kaze_completion_blocking_total").increment(1);
+            block_in_place(|| ctx.wait())
+                .map_err(|e| {
+                    counter!("kaze_completion_blocking_errors_total")
+                        .increment(1);
+                    e
+                })
+                .context("kaze blocking wait completion error")?;
+        }
+        let mut bytes = pool.pull_owned();
+        let buf = ctx.buffer();
+        let len = buf.len();
+        bytes.rewind();
+        bytes.as_inner_mut().clear();
+        bytes.as_inner_mut().reserve(len);
+        bytes.as_inner_mut().put_slice(buf);
+        ctx.commit(len)
+            .map_err(|e| {
+                counter!("kaze_commpletion_errors_total").increment(1);
+                e
+            })
+            .context("kaze completion error")?;
+        counter!("kaze_completion_packets_total").increment(1);
+        counter!("kaze_completion_bytes_total").increment(len as u64);
+        let packet = Packet::from_host(bytes)
+            .context("kaze host packet parse error")?;
+        Ok(packet)
     }
 }
 
@@ -173,6 +219,7 @@ impl Sender {
 
 #[cfg(test)]
 mod tests {
+    use kaze_plugin::default_from_clap;
     use kaze_protocol::{packet::new_bytes_pool, service::SinkMessage};
     use tower::{Layer, ServiceExt};
 
@@ -180,7 +227,7 @@ mod tests {
 
     #[test]
     fn test_send() {
-        let edge = Options::default().build().unwrap();
+        let edge = default_from_clap::<Options>().build().unwrap();
         let (tx, _rx) = edge.into_split();
         let pool = new_bytes_pool();
         tx.clone().service(pool.clone()).boxed();

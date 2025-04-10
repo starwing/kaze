@@ -10,4 +10,3 @@ clap = { version = "4.5.31", features = ["derive"] }
 serde = { version = "1.0.218", features = ["derive"] }
 kaze-protocol = { path = "../kaze-protocol" }
 kaze-util = { path = "../kaze-util" }
-clap-merge = { path = "../clap-merge" }

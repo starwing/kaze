@@ -2,7 +2,6 @@ use std::{net::Ipv4Addr, str::FromStr, sync::Arc};
 
 use kaze_plugin::{
     clap::Args,
-    clap_merge::ClapMerge,
     serde::{Deserialize, Serialize},
     util::DurationString,
 };
@@ -10,7 +9,7 @@ use kaze_plugin::{
 use super::RateLimit;
 
 /// rate limit configurations
-#[derive(ClapMerge, Args, Serialize, Deserialize, Clone, Debug)]
+#[derive(Args, Serialize, Deserialize, Clone, Debug)]
 #[serde(crate = "kaze_plugin::serde")]
 #[command(next_help_heading = "Rate limit configurations")]
 #[group(id = "RateLimitOptions")]

@@ -1,3 +1,4 @@
+mod clap_default;
 mod local;
 
 use std::sync::Arc;
@@ -7,12 +8,14 @@ use tower::util::BoxCloneSyncService;
 use kaze_protocol::message::PacketWithAddr;
 use kaze_util::tower_ext::ServiceCell;
 
+pub use anyhow;
 pub use clap;
-pub use clap_merge;
 pub use serde;
 
 pub use kaze_protocol as protocol;
 pub use kaze_util as util;
+
+pub use clap_default::default_from_clap;
 pub use local::*;
 
 pub type PipelineService =

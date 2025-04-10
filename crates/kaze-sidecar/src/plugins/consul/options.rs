@@ -1,8 +1,7 @@
 use kaze_plugin::clap::Args;
-use kaze_plugin::clap_merge::ClapMerge;
 use kaze_plugin::serde::{Deserialize, Serialize};
 
-#[derive(ClapMerge, Args, Serialize, Deserialize, Clone, Debug)]
+#[derive(Args, Serialize, Deserialize, Clone, Debug)]
 #[serde(crate = "kaze_plugin::serde")]
 #[command(next_help_heading = "Consul resolver configurations")]
 pub struct Options {

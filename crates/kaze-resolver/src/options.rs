@@ -5,7 +5,6 @@ use std::{
 
 use kaze_plugin::{
     clap::Args,
-    clap_merge::ClapMerge,
     serde::{Deserialize, Serialize},
     util::DurationString,
 };
@@ -13,7 +12,7 @@ use kaze_plugin::{
 use crate::{Resolver, cached::Cached, local::Local};
 
 /// local resolver configurations
-#[derive(ClapMerge, Args, Serialize, Deserialize, Clone, Debug)]
+#[derive(Args, Serialize, Deserialize, Clone, Debug)]
 #[command(next_help_heading = "Local resolver configurations")]
 pub struct Options {
     /// Size of resolver mask cache

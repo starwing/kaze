@@ -8,9 +8,6 @@ fn main() -> anyhow::Result<()> {
     if let Some(thread_count) = sidecar.thread_count() {
         runtime.worker_threads(thread_count);
     }
-    let runtime = runtime.enable_all().build()?;
-
-    runtime.block_on(sidecar.run())?;
-
+    runtime.enable_all().build()?.block_on(sidecar.run())?;
     Ok(())
 }

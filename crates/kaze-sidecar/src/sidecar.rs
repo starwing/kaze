@@ -2,21 +2,18 @@ use anyhow::Context as _;
 use kaze_plugin::clap::{
     crate_version, CommandFactory, FromArgMatches, Parser,
 };
-use kaze_plugin::clap_merge::ClapMerge;
-use kaze_plugin::protocol::packet::{new_bytes_pool, BytesPool, Packet};
+use kaze_plugin::protocol::packet::{new_bytes_pool, BytesPool};
 use kaze_plugin::protocol::service::{SinkMessage, ToMessageService};
 use kaze_plugin::serde::{Deserialize, Serialize};
 use kaze_plugin::util::tower_ext::{ChainLayer, ServiceExt};
 use kaze_plugin::PipelineService;
 use kaze_resolver::dispatch_service;
-use metrics::counter;
 use scopeguard::defer;
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
 use tokio::join;
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
-use tokio::task::block_in_place;
 use tower::util::BoxCloneSyncService;
 use tower::ServiceBuilder;
 
@@ -26,7 +23,7 @@ use crate::plugins::tracker::RpcTracker;
 use crate::plugins::{consul, corral, log, prometheus, ratelimit};
 
 /// the kaze sidecar for host
-#[derive(ClapMerge, Parser, Serialize, Deserialize, Clone, Debug)]
+#[derive(Parser, Serialize, Deserialize, Clone, Debug)]
 #[serde(crate = "kaze_plugin::serde")]
 #[command(version = VERSION.as_str(), about)]
 pub struct Options {
@@ -147,43 +144,24 @@ impl Sidecar {
     /// run the sidecar
     pub async fn run(mut self) -> anyhow::Result<()> {
         let rx = self.rx.take().unwrap();
-        let (r1, r2) =
-            join!(self.handle_edge_receiver(rx), self.handle_listener());
+        let (r1, r2) = join!(self.handle_receiver(rx), self.handle_listener());
         r1?;
         r2?;
         Ok(())
     }
 
-    async fn handle_edge_receiver(
+    async fn handle_receiver(
         &self,
-        rx: kaze_edge::Receiver,
+        mut rx: kaze_edge::Receiver,
     ) -> anyhow::Result<()> {
         let mut sink = self.sink.clone();
         loop {
-            let mut ctx = match rx.read_context() {
-                Ok(ctx) => ctx,
-                Err(kaze_edge::Error::Closed) => break,
-                Err(e) => return Err(e.into()),
-            };
-            if ctx.would_block() {
-                counter!("kaze_completion_blocking_total").increment(1);
-                block_in_place(|| ctx.wait())
-                    .map_err(|e| {
-                        counter!("kaze_completion_blocking_errors_total")
-                            .increment(1);
-                        e
-                    })
-                    .context("kaze blocking wait completion error")?;
-            }
-            let mut bytes = self.pool.pull_owned();
-            bytes.rewind();
-            bytes.as_inner_mut().clear();
-            ctx.read(bytes.as_inner_mut())?;
-
-            let packet = Packet::from_host(bytes)?;
+            let packet = rx
+                .read_packet(&self.pool)
+                .await
+                .context("failed to read packet")?;
             sink.ready_call((packet, None)).await?;
         }
-        Ok(())
     }
 
     async fn handle_listener(&self) -> anyhow::Result<()> {

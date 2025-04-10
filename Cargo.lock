@@ -270,23 +270,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "clap-merge"
-version = "0.1.0"
-dependencies = [
- "clap",
- "clap-merge-derive",
-]
-
-[[package]]
-name = "clap-merge-derive"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "clap_builder"
 version = "4.5.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -918,14 +901,11 @@ name = "kaze-edge"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "clap",
- "clap-merge",
  "kaze-core",
+ "kaze-plugin",
  "kaze-protocol",
- "kaze-util",
  "metrics",
  "page_size",
- "serde",
  "tokio",
  "tower",
  "tracing",
@@ -941,7 +921,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "clap-merge",
  "kaze-protocol",
  "kaze-util",
  "serde",

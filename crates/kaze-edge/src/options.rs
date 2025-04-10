@@ -1,14 +1,15 @@
 use std::net::Ipv4Addr;
 
 use anyhow::Result;
-use clap::Args;
-use clap_merge::ClapMerge;
-use serde::{Deserialize, Serialize};
+use kaze_plugin::clap::Args;
+use kaze_plugin::serde::{Deserialize, Serialize};
+use kaze_plugin::{clap, default_from_clap};
 
 use crate::Edge;
 
 /// Host bridge configurations
-#[derive(ClapMerge, Args, Serialize, Deserialize, Clone, Debug)]
+#[derive(Args, Serialize, Deserialize, Clone, Debug)]
+#[serde(crate = "kaze_plugin::serde")]
 #[command(next_help_heading = "Host bridge configurations")]
 #[group(id = "EdgeOptions")]
 pub struct Options {
@@ -36,7 +37,7 @@ pub struct Options {
 impl Options {
     /// create a new options
     pub fn new() -> Self {
-        Self::default()
+        default_from_clap()
     }
 
     /// set name
