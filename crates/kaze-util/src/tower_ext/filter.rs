@@ -54,7 +54,7 @@ impl<T, M, F, S> Service<T> for Filter<F, S>
 where
     F: Service<T, Response = Option<M>>,
     S: Service<M> + Clone,
-    F::Error: Into<S::Error>,
+    S::Error: From<F::Error>,
 {
     type Response = Option<S::Response>;
     type Error = S::Error;
@@ -91,7 +91,7 @@ impl<F, S, T, R, FE> Future for FilterServiceFuture<F, S, S::Future>
 where
     F: Future<Output = Result<Option<T>, FE>>,
     S: Service<T, Response = R> + Clone,
-    FE: Into<S::Error>,
+    S::Error: From<FE>,
 {
     type Output = Result<Option<R>, S::Error>;
 
@@ -137,7 +137,7 @@ impl<T, M, R, F1, F2> Service<T> for Stack<F1, F2>
 where
     F1: Service<T, Response = Option<M>>,
     F2: Service<M, Response = Option<R>> + Clone,
-    F1::Error: Into<F2::Error>,
+    F2::Error: From<F1::Error>,
 {
     type Response = Option<R>;
     type Error = F2::Error;
@@ -174,7 +174,7 @@ impl<T, R, F1, F2, F1E> Future for StackFuture<F1, F2, F2::Future>
 where
     F1: Future<Output = Result<Option<T>, F1E>>,
     F2: Service<T, Response = Option<R>>,
-    F1E: Into<F2::Error>,
+    F2::Error: From<F1E>,
 {
     type Output = Result<F2::Response, F2::Error>;
 

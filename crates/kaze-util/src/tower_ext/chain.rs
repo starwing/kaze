@@ -47,8 +47,7 @@ impl<T, First, Second> Service<T> for Chain<First, Second>
 where
     First: Service<T>,
     Second: Service<First::Response> + Clone,
-    First::Error: Into<Second::Error>,
-    Second::Error: std::fmt::Debug,
+    Second::Error: From<First::Error> + std::fmt::Debug,
 {
     type Response = Second::Response;
     type Error = Second::Error;
@@ -97,8 +96,7 @@ impl<Fut, Second, T, E> ChainFuture<Fut, Second, T, E>
 where
     Fut: Future<Output = Result<T, E>>,
     Second: Service<T>,
-    E: Into<Second::Error>,
-    Second::Error: std::fmt::Debug,
+    Second::Error: From<E> + std::fmt::Debug,
 {
     pub fn new(fut: Fut, outer: Second) -> Self {
         Self::WaitingInner { fut, second: outer }
@@ -109,8 +107,7 @@ impl<Fut, Second, T, E> Future for ChainFuture<Fut, Second, T, E>
 where
     Fut: Future<Output = Result<T, E>>,
     Second: Service<T>,
-    E: Into<Second::Error>,
-    Second::Error: std::fmt::Debug,
+    Second::Error: From<E> + std::fmt::Debug,
 {
     type Output = Result<Second::Response, Second::Error>;
 
@@ -122,7 +119,8 @@ where
         loop {
             match self.as_mut().project() {
                 ChainFutureProj::WaitingInner { fut, second: outer } => {
-                    let res = ready!(fut.poll(cx)).map_err(Into::into);
+                    let res: Result<_, Second::Error> =
+                        ready!(fut.poll(cx)).map_err(Into::into);
                     if let Err(err) = res {
                         return Poll::Ready(Err(err.into()));
                     }
