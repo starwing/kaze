@@ -196,18 +196,16 @@ impl Sender {
         layer_fn(move |inner: S| {
             let svc = svc.clone();
             service_fn(move |item: Message| {
-                let svc = svc.clone();
-                let inner = inner.clone();
+                let mut svc = svc.clone();
+                let mut inner = inner.clone();
                 async move {
                     if item.destination().is_local() {
                         return svc
-                            .clone()
                             .ready_call(item)
                             .await
                             .context("send packet");
                     }
                     inner
-                        .clone()
                         .ready_call(item)
                         .await
                         .context("failed to forward packet")

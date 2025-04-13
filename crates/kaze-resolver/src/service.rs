@@ -15,12 +15,11 @@ pub fn dispatch_service<R>(resolver: R) -> impl MessageService<Message>
 where
     R: Resolver + Clone,
 {
-    service_fn(move |req: Message| {
-        let route_type = req.packet().hdr().route_type.clone();
+    service_fn(move |mut msg: Message| {
+        let route_type = msg.packet().hdr().route_type.clone();
         let resolver = resolver.clone();
         let dispatch = dispatch(route_type, resolver);
         async move {
-            let mut msg: Message = req.into();
             let Some(dst) = dispatch.await else {
                 // can not find route
                 error!(hdr = ?msg.packet().hdr(), "Can not find route");
