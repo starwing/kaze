@@ -115,7 +115,7 @@ async fn dispatch_multicast(
 mod tests {
     use std::sync::Arc;
 
-    use kaze_plugin::default_from_clap;
+    use kaze_plugin::ClapDefault;
     use tower::ServiceExt;
 
     use crate::LocalOptions;
@@ -124,8 +124,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_send() {
-        let resolver =
-            Arc::new(default_from_clap::<LocalOptions>().build().await);
+        let resolver = Arc::new(LocalOptions::default().build().await);
         dispatch_service(resolver).boxed();
     }
 }

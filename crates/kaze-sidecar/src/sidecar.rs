@@ -1,3 +1,10 @@
+use std::path::PathBuf;
+use std::sync::{Arc, LazyLock};
+
+use crate::config::{ConfigBuilder, ConfigFileBuilder, ConfigMap};
+use crate::plugins::corral::Corral;
+use crate::plugins::tracker::RpcTracker;
+use crate::plugins::{consul, corral, log, prometheus, ratelimit};
 use anyhow::Context as _;
 use kaze_plugin::clap::{
     crate_version, CommandFactory, FromArgMatches, Parser,
@@ -9,18 +16,15 @@ use kaze_plugin::util::tower_ext::{ChainLayer, ServiceExt};
 use kaze_plugin::PipelineService;
 use kaze_resolver::dispatch_service;
 use scopeguard::defer;
-use std::path::PathBuf;
-use std::sync::{Arc, LazyLock};
 use tokio::join;
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
 use tower::util::BoxCloneSyncService;
 use tower::ServiceBuilder;
-
-use crate::config::{ConfigBuilder, ConfigFileBuilder};
-use crate::plugins::corral::Corral;
-use crate::plugins::tracker::RpcTracker;
-use crate::plugins::{consul, corral, log, prometheus, ratelimit};
+use tracing::level_filters::LevelFilter;
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::{fmt, EnvFilter};
 
 /// the kaze sidecar for host
 #[derive(Parser, Serialize, Deserialize, Clone, Debug)]
@@ -52,28 +56,34 @@ pub struct Options {
 
 impl Options {
     pub fn build() -> anyhow::Result<Sidecar> {
-        let cmd = Options::command();
-        let builder = ConfigBuilder::new(cmd)
-            .add::<log::Options>("log")
-            .add::<kaze_edge::Options>("edge")
-            .add::<corral::Options>("corral")
-            .add::<ratelimit::Options>("rate_limit")
-            .add::<kaze_resolver::LocalOptions>("local")
-            .add::<consul::Options>("consul")
-            .add::<prometheus::Options>("prometheus")
-            .debug_assert();
-
-        let merger = builder.get_matches();
-        let options = Options::from_arg_matches(merger.arg_matches())?;
-        let mut filefinder = ConfigFileBuilder::default();
-        if let Some(path) = &options.config {
-            filefinder = filefinder.add_file(path.clone());
-        }
-
-        let content = filefinder.build()?;
-        let mut config = merger.build(content)?;
-
+        let mut config =
+            Self::new_config_map().context("failed to load config")?;
         let pool = new_bytes_pool();
+
+        let expander = |prefix: &str| -> String {
+            let edge = config.get::<kaze_edge::Options>().unwrap();
+            prefix
+                .replace("{name}", edge.name.as_str())
+                .replace("{ident}", &edge.ident.to_string())
+                .replace("{version}", VERSION.as_str())
+        };
+        let log = config.get::<log::Options>();
+        let (non_block, _guard) = log::Options::build_writer(log, expander)
+            .context("failed to build log")?;
+
+        // install tracing with configuration
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::fmt::layer())
+            .with(non_block.map(|non_block| {
+                fmt::layer().with_ansi(false).with_writer(non_block)
+            }))
+            .with(
+                EnvFilter::builder()
+                    .with_default_directive(LevelFilter::INFO.into())
+                    .with_env_var("KAZE_LOG")
+                    .from_env_lossy(),
+            )
+            .init();
 
         let edge: Box<kaze_edge::Options> = config.take().unwrap();
         let (prefix, ident) = (edge.name.clone(), edge.ident);
@@ -106,7 +116,45 @@ impl Options {
             .layer(tx.clone().layer(pool.clone()))
             .service(SinkMessage::new());
         let sink: PipelineService = BoxCloneSyncService::new(sink);
-        Ok(Sidecar::new(pool, rx, corral, sink, options))
+
+        let options = config.take::<Options>().unwrap();
+        Ok(Sidecar {
+            pool,
+            rx: Some(rx),
+            corral,
+            sink,
+            options,
+            _guard,
+        })
+    }
+
+    fn new_config_map() -> anyhow::Result<ConfigMap> {
+        let cmd = Options::command();
+        let merger = Self::new_config_builder(cmd).get_matches();
+        let options = Options::from_arg_matches(merger.arg_matches())
+            .context("failed to parse options")?;
+
+        let mut filefinder = ConfigFileBuilder::default();
+        if let Some(path) = &options.config {
+            filefinder = filefinder.add_file(path.clone());
+        }
+
+        let content = filefinder.build().context("build file finder error")?;
+        let mut map = merger.build(content).context("merger build error")?;
+        map.insert(options);
+        Ok(map)
+    }
+
+    fn new_config_builder(cmd: clap::Command) -> ConfigBuilder {
+        ConfigBuilder::new(cmd)
+            .add::<log::Options>("log")
+            .add::<kaze_edge::Options>("edge")
+            .add::<corral::Options>("corral")
+            .add::<ratelimit::Options>("rate_limit")
+            .add::<kaze_resolver::LocalOptions>("local")
+            .add::<consul::Options>("consul")
+            .add::<prometheus::Options>("prometheus")
+            .debug_assert()
     }
 }
 
@@ -116,26 +164,10 @@ pub struct Sidecar {
     corral: Arc<Corral>,
     sink: PipelineService,
     options: Options,
+    _guard: Option<WorkerGuard>,
 }
 
 impl Sidecar {
-    /// create a new sidecar
-    pub fn new(
-        pool: BytesPool,
-        rx: kaze_edge::Receiver,
-        corral: Arc<Corral>,
-        sink: PipelineService,
-        options: Options,
-    ) -> Self {
-        Self {
-            pool,
-            rx: Some(rx),
-            corral,
-            sink,
-            options,
-        }
-    }
-
     /// get the thread count
     pub fn thread_count(&self) -> Option<usize> {
         self.options.threads

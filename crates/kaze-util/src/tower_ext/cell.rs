@@ -3,11 +3,11 @@ use std::sync::OnceLock;
 use tower::Service;
 
 #[derive(Debug, Clone)]
-pub struct ServiceCell<S> {
+pub struct CellService<S> {
     inner: OnceLock<S>,
 }
 
-impl<S> ServiceCell<S> {
+impl<S> CellService<S> {
     pub fn new() -> Self {
         Self {
             inner: OnceLock::new(),
@@ -23,7 +23,7 @@ impl<S> ServiceCell<S> {
     }
 }
 
-impl<T, S: Service<T>> Service<T> for ServiceCell<S> {
+impl<T, S: Service<T>> Service<T> for CellService<S> {
     type Response = S::Response;
     type Error = S::Error;
     type Future = S::Future;

@@ -148,6 +148,11 @@ impl ConfigMap {
         Self { map }
     }
 
+    /// add new options to map
+    pub fn insert<T: Any>(&mut self, config: T) {
+        self.map.insert(TypeId::of::<T>(), Box::new(config));
+    }
+
     /// get the config
     pub fn get<T: Any>(&self) -> Option<&T> {
         self.map
@@ -156,10 +161,11 @@ impl ConfigMap {
     }
 
     /// take the config
-    pub fn take<T: Any>(&mut self) -> Option<Box<T>> {
+    pub fn take<T: Any>(&mut self) -> Option<T> {
         self.map
             .remove(&TypeId::of::<T>())
             .and_then(|x| x.downcast::<T>().ok())
+            .map(|e| *e)
     }
 }
 

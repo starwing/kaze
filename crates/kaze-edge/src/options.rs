@@ -3,7 +3,7 @@ use std::net::Ipv4Addr;
 use anyhow::Result;
 use kaze_plugin::clap::Args;
 use kaze_plugin::serde::{Deserialize, Serialize};
-use kaze_plugin::{clap, default_from_clap};
+use kaze_plugin::{ClapDefault, clap};
 
 use crate::Edge;
 
@@ -37,7 +37,7 @@ pub struct Options {
 impl Options {
     /// create a new options
     pub fn new() -> Self {
-        default_from_clap()
+        Self::default()
     }
 
     /// set name

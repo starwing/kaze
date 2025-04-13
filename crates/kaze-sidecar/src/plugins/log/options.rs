@@ -140,11 +140,4 @@ impl Options {
             .map(|(non_block, guard)| (Some(non_block), Some(guard)))
             .unwrap_or((None, None)))
     }
-
-    // fn format_log_name(root: &Config, prefix: &str) -> String {
-    //     prefix
-    //         .replace("{name}", root.edge.name.as_str())
-    //         .replace("{ident}", &root.edge.ident.to_string())
-    //         .replace("{version}", VERSION.as_str())
-    // }
 }

@@ -6,3 +6,5 @@ sidecar/logs
 test.*
 *.so
 *.o
+*.log
+logs

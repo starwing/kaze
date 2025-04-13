@@ -219,7 +219,6 @@ impl Sender {
 
 #[cfg(test)]
 mod tests {
-    use kaze_plugin::default_from_clap;
     use kaze_protocol::{packet::new_bytes_pool, service::SinkMessage};
     use tower::{Layer, ServiceExt};
 
@@ -227,7 +226,7 @@ mod tests {
 
     #[test]
     fn test_send() {
-        let edge = default_from_clap::<Options>().build().unwrap();
+        let edge = Options::new().build().unwrap();
         let (tx, _rx) = edge.into_split();
         let pool = new_bytes_pool();
         tx.clone().service(pool.clone()).boxed();
