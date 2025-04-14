@@ -1,8 +1,91 @@
-use std::convert::Infallible;
+use std::{
+    convert::Infallible,
+    fmt::{Debug, Display},
+};
 
 use futures::ready;
 use pin_project::pin_project;
 use tower::{Layer, Service};
+
+#[derive(Clone, Copy)]
+pub struct FuncFilter<F, S> {
+    filter: F,
+    service: S,
+}
+
+impl<F, S> FuncFilter<F, S> {
+    pub fn new(filter: F, service: S) -> Self {
+        Self { filter, service }
+    }
+}
+
+impl<T, F, S> Service<T> for FuncFilter<F, S>
+where
+    F: Fn(&T) -> bool,
+    S: Service<T>,
+{
+    type Response = S::Response;
+    type Error = FilterError<T, S::Error>;
+    type Future = FuncFilterFuture<T, S::Future>;
+
+    fn poll_ready(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        self.service.poll_ready(cx).map_err(FilterError::Errored)
+    }
+
+    fn call(&mut self, req: T) -> Self::Future {
+        if (self.filter)(&req) {
+            FuncFilterFuture::Service(self.service.call(req))
+        } else {
+            FuncFilterFuture::Filtered(Some(req))
+        }
+    }
+}
+
+#[pin_project(project = FuncFilterFutureProj)]
+pub enum FuncFilterFuture<T, F> {
+    Filtered(Option<T>),
+    Service(#[pin] F),
+}
+
+impl<T, F, R, E> Future for FuncFilterFuture<T, F>
+where
+    F: Future<Output = Result<R, E>>,
+{
+    type Output = Result<R, FilterError<T, E>>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        match self.project() {
+            FuncFilterFutureProj::Filtered(req) => {
+                Err(FilterError::Filtered(req.take().unwrap())).into()
+            }
+            FuncFilterFutureProj::Service(fut) => {
+                ready!(fut.poll(cx)).map_err(FilterError::Errored).into()
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum FilterError<T, E> {
+    Filtered(T),
+    Errored(E),
+}
+
+impl<T, E, E1> From<E> for FilterError<T, E1>
+where
+    E: Debug + Display,
+    E1: From<E>,
+{
+    fn from(err: E) -> Self {
+        FilterError::Errored(err.into())
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct FilterChain<F> {

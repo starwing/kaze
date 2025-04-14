@@ -1,12 +1,15 @@
 mod cell;
 mod chain;
-mod filter;
 mod option;
 mod sink;
 
+pub mod case;
+pub mod filter;
+
+pub use case::Case;
 pub use cell::CellService;
 pub use chain::{Chain, ChainLayer};
-pub use filter::{Filter, FilterChain, Identity, Stack};
+pub use filter::{Filter, FilterChain};
 pub use option::OptionService;
 pub use sink::SinkService;
 
