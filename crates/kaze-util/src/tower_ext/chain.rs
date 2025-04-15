@@ -86,10 +86,7 @@ where
         fut: Fut,
         second: Second,
     },
-    WaitingOuter {
-        #[pin]
-        fut: Second::Future,
-    },
+    WaitingOuter(#[pin] Second::Future),
 }
 
 impl<Fut, Second, T, E> ChainFuture<Fut, Second, T, E>
@@ -125,9 +122,9 @@ where
                         return Poll::Ready(Err(err.into()));
                     }
                     let fut = outer.call(res.unwrap());
-                    self.set(ChainFuture::WaitingOuter { fut });
+                    self.set(ChainFuture::WaitingOuter(fut));
                 }
-                ChainFutureProj::WaitingOuter { fut } => {
+                ChainFutureProj::WaitingOuter(fut) => {
                     return fut.poll(cx).map_err(Into::into);
                 }
             }

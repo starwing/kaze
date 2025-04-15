@@ -80,9 +80,7 @@ where
                 default: Some(def),
             }
         } else {
-            CaseFuture::DefaultCall {
-                future: def.call(req),
-            }
+            CaseFuture::DefaultCall(def.call(req))
         }
     }
 }
@@ -97,11 +95,7 @@ where
         future: SF,
         default: Option<D>,
     },
-    DefaultCall {
-        #[pin]
-        future: D::Future,
-    },
-    Done,
+    DefaultCall(#[pin] D::Future),
 }
 
 impl<T, SF, D, SE> Future for CaseFuture<T, SF, D>
@@ -124,18 +118,15 @@ where
                         let mut service = default
                             .take()
                             .expect("default service should be available");
-                        self.set(CaseFuture::DefaultCall {
-                            future: service.call(req),
-                        });
-                        self.poll(cx) // recurse call to update self state
+                        self.set(CaseFuture::DefaultCall(service.call(req)));
+                        self.poll(cx)
                     }
                     Err(FilterError::Errored(err)) => {
                         Poll::Ready(Err(err.into()))
                     }
                 }
             }
-            CaseFutureProj::DefaultCall { future } => future.poll(cx),
-            CaseFutureProj::Done => panic!("Future polled after completion"),
+            CaseFutureProj::DefaultCall(future) => future.poll(cx),
         }
     }
 }

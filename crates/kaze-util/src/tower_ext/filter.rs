@@ -153,21 +153,23 @@ where
 
     fn call(&mut self, req: T) -> Self::Future {
         let filter_fut = self.filter.call(req);
-        FilterServiceFuture {
+        let service = self.service.clone();
+        let service = std::mem::replace(&mut self.service, service);
+        FilterServiceFuture::FilterCall {
             filter_fut,
-            service: self.service.clone(),
-            service_fut: None,
+            service,
         }
     }
 }
 
-#[pin_project]
-pub struct FilterServiceFuture<F, S, SF> {
-    #[pin]
-    filter_fut: F,
-    service: S,
-    #[pin]
-    service_fut: Option<SF>,
+#[pin_project(project = FilterServiceFutureProj)]
+pub enum FilterServiceFuture<F, S, SF> {
+    FilterCall {
+        #[pin]
+        filter_fut: F,
+        service: S,
+    },
+    ServiceCall(#[pin] SF),
 }
 
 impl<F, S, T, R, FE> Future for FilterServiceFuture<F, S, S::Future>
@@ -183,23 +185,22 @@ where
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
         use std::task::Poll;
-
-        let proj = self.as_mut().project();
-        if let Some(sf) = proj.service_fut.as_pin_mut() {
-            return Poll::Ready(ready!(sf.poll(cx)).map(Some));
-        }
-        match ready!(proj.filter_fut.poll(cx)) {
-            Ok(Some(req)) => {
-                let mut proj = self.as_mut().project();
-                let fut = proj.service.call(req);
-                proj.service_fut.set(Some(fut));
-                Poll::Ready(
-                    ready!(proj.service_fut.as_pin_mut().unwrap().poll(cx))
-                        .map(Some),
-                )
+        match self.as_mut().project() {
+            FilterServiceFutureProj::FilterCall {
+                filter_fut,
+                service,
+            } => match ready!(filter_fut.poll(cx)) {
+                Ok(Some(req)) => {
+                    let fut = service.call(req);
+                    self.set(FilterServiceFuture::ServiceCall(fut));
+                    self.poll(cx)
+                }
+                Ok(None) => Poll::Ready(Ok(None)),
+                Err(err) => Poll::Ready(Err(err.into())),
+            },
+            FilterServiceFutureProj::ServiceCall(service) => {
+                return Poll::Ready(ready!(service.poll(cx)).map(Some));
             }
-            Ok(None) => Poll::Ready(Ok(None)),
-            Err(err) => Poll::Ready(Err(err.into())),
         }
     }
 }
@@ -236,21 +237,23 @@ where
 
     fn call(&mut self, req: T) -> Self::Future {
         let filter1_fut = self.filter1.call(req);
-        StackFuture {
+        let filter2 = self.filter2.clone();
+        let filter2 = std::mem::replace(&mut self.filter2, filter2);
+        StackFuture::Filter1Call {
             filter1_fut,
-            filter2_fut: None,
-            filter2: self.filter2.clone(),
+            filter2,
         }
     }
 }
 
-#[pin_project]
-pub struct StackFuture<F1, F2, F2F> {
-    #[pin]
-    filter1_fut: F1,
-    filter2: F2,
-    #[pin]
-    filter2_fut: Option<F2F>,
+#[pin_project( project=StackFutureProj)]
+pub enum StackFuture<F1, F2, F2F> {
+    Filter1Call {
+        #[pin]
+        filter1_fut: F1,
+        filter2: F2,
+    },
+    Filter2Call(#[pin] F2F),
 }
 
 impl<T, R, F1, F2, F1E> Future for StackFuture<F1, F2, F2::Future>
@@ -266,22 +269,22 @@ where
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
         use std::task::Poll;
-
-        let proj = self.as_mut().project();
-        if let Some(sf) = proj.filter2_fut.as_pin_mut() {
-            return Poll::Ready(ready!(sf.poll(cx)));
-        }
-        match ready!(proj.filter1_fut.poll(cx)) {
-            Ok(Some(req)) => {
-                let mut proj = self.as_mut().project();
-                let fut = proj.filter2.call(req);
-                proj.filter2_fut.set(Some(fut));
-                Poll::Ready(ready!(
-                    proj.filter2_fut.as_pin_mut().unwrap().poll(cx)
-                ))
+        match self.as_mut().project() {
+            StackFutureProj::Filter1Call {
+                filter1_fut,
+                filter2,
+            } => match ready!(filter1_fut.poll(cx)) {
+                Ok(Some(req)) => {
+                    let fut = filter2.call(req);
+                    self.set(StackFuture::Filter2Call(fut));
+                    self.poll(cx)
+                }
+                Ok(None) => Poll::Ready(Ok(None)),
+                Err(err) => Poll::Ready(Err(err.into())),
+            },
+            StackFutureProj::Filter2Call(filter2_fut) => {
+                return Poll::Ready(ready!(filter2_fut.poll(cx)));
             }
-            Ok(None) => Poll::Ready(Ok(None)),
-            Err(err) => Poll::Ready(Err(err.into())),
         }
     }
 }
