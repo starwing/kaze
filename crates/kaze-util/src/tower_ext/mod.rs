@@ -3,6 +3,7 @@ mod chain;
 mod option;
 mod sink;
 
+pub mod adaptor;
 pub mod case;
 pub mod filter;
 

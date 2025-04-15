@@ -1,6 +1,8 @@
 mod clap_default;
 mod local;
 
+pub mod graceful_exit;
+
 use std::sync::Arc;
 
 use tower::util::BoxCloneSyncService;
@@ -22,6 +24,11 @@ pub type PipelineService =
     BoxCloneSyncService<PacketWithAddr, (), anyhow::Error>;
 
 pub type PipelineCell = CellService<PipelineService>;
+
+pub trait SubsystemHandle {
+    fn pipeline(&self) -> PipelineService;
+    fn graceful_exit(&self) -> &graceful_exit::GracefulExit;
+}
 
 /// a trait that require a pipeline service, implemented by all plugins that
 /// need a pipeline service. These plugins can contain a PipelineCell itself,
