@@ -1,16 +1,17 @@
 use std::{
-    future::{self},
+    future::{Future, pending},
+    pin::Pin,
     sync::Arc,
+    task::{Context, Poll, Waker, ready},
 };
 
-use futures::ready;
 use parking_lot::Mutex;
 use tokio_util::sync::ReusableBoxFuture;
 use tower::Service;
 
 pub trait AsyncService<Request> {
-    type Response: 'static;
-    type Error: 'static;
+    type Response;
+    type Error;
 
     fn call(
         &self,
@@ -18,28 +19,15 @@ pub trait AsyncService<Request> {
     ) -> impl Future<Output = Result<Self::Response, Self::Error>> + Send + 'static;
 }
 
+#[derive(Clone)]
 pub struct AsyncServiceAdaptor<S, T>
 where
     S: AsyncService<T>,
+    S::Response: 'static,
+    S::Error: 'static,
 {
     service: S,
     state: Arc<Mutex<SharedState<S::Response, S::Error>>>,
-}
-
-struct SharedState<R, E> {
-    in_flight: bool,
-    waker: Option<std::task::Waker>,
-    future: ReusableBoxFuture<'static, Result<R, E>>,
-}
-
-impl<R: 'static, E: 'static> SharedState<R, E> {
-    fn new() -> Self {
-        Self {
-            in_flight: false,
-            waker: None,
-            future: ReusableBoxFuture::new(future::pending()),
-        }
-    }
 }
 
 impl<S, T> AsyncServiceAdaptor<S, T>
@@ -60,16 +48,16 @@ where
 {
     type Response = S::Response;
     type Error = S::Error;
-    type Future = AsyncFuture<S::Response, S::Error>;
+    type Future = AdaptorFuture<S::Response, S::Error>;
 
     fn poll_ready(
         &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), Self::Error>> {
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), Self::Error>> {
         let mut state = self.state.lock();
         if state.in_flight {
             state.waker.replace(cx.waker().clone());
-            return std::task::Poll::Pending;
+            return Poll::Pending;
         }
         Ok(()).into()
     }
@@ -79,41 +67,63 @@ where
         if state.in_flight {
             panic!("Service must be ready before calling");
         }
-        state.in_flight = true;
-        state.future.set(self.service.call(req));
-        AsyncFuture {
+        state.set(self.service.call(req));
+        AdaptorFuture {
             state: self.state.clone(),
         }
     }
 }
 
-pub struct AsyncFuture<R, E> {
-    state: Arc<Mutex<SharedState<R, E>>>,
+struct SharedState<R: 'static, E: 'static> {
+    in_flight: bool,
+    waker: Option<Waker>,
+    future: ReusableBoxFuture<'static, Result<R, E>>,
 }
 
-impl<R, E> Drop for AsyncFuture<R, E> {
-    fn drop(&mut self) {
-        let mut state = self.state.lock();
-        state.in_flight = false;
-        if let Some(waker) = state.waker.take() {
+impl<R, E> SharedState<R, E> {
+    fn new() -> Self {
+        Self {
+            in_flight: false,
+            waker: None,
+            future: ReusableBoxFuture::new(pending()),
+        }
+    }
+
+    fn set(
+        &mut self,
+        future: impl Future<Output = Result<R, E>> + Send + 'static,
+    ) {
+        self.in_flight = true;
+        self.future.set(future);
+    }
+
+    fn reset(&mut self) {
+        self.in_flight = false;
+        if let Some(waker) = self.waker.take() {
             waker.wake();
         }
     }
 }
 
-impl<R, E> Future for AsyncFuture<R, E> {
+pub struct AdaptorFuture<R: 'static, E: 'static> {
+    state: Arc<Mutex<SharedState<R, E>>>,
+}
+
+impl<R, E> Drop for AdaptorFuture<R, E> {
+    fn drop(&mut self) {
+        let mut state = self.state.lock();
+        state.in_flight = false;
+        state.reset();
+    }
+}
+
+impl<R, E> Future for AdaptorFuture<R, E> {
     type Output = Result<R, E>;
 
-    fn poll(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut state = self.state.lock();
         let result = ready!(state.future.poll(cx));
-        state.in_flight = false;
-        if let Some(waker) = state.waker.take() {
-            waker.wake();
-        }
+        state.reset();
         result.into()
     }
 }
