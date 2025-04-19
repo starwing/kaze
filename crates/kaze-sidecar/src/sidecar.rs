@@ -9,12 +9,13 @@ use anyhow::Context as _;
 use kaze_plugin::clap::{
     crate_version, CommandFactory, FromArgMatches, Parser,
 };
-use kaze_plugin::protocol::packet::{new_bytes_pool, BytesPool};
+use kaze_plugin::protocol::packet::new_bytes_pool;
 use kaze_plugin::protocol::service::{SinkMessage, ToMessageService};
 use kaze_plugin::serde::{Deserialize, Serialize};
-use kaze_plugin::util::tower_ext::{ChainLayer, ServiceExt};
+use kaze_plugin::service::ServiceExt;
+use kaze_plugin::util::tower_ext::ServiceExt as _;
 use kaze_plugin::PipelineService;
-use kaze_resolver::dispatch_service;
+use kaze_resolver::ResolverExt;
 use scopeguard::defer;
 use tokio::join;
 use tokio::net::TcpListener;
@@ -91,7 +92,7 @@ impl Options {
             kaze_edge::Edge::unlink(prefix, ident).unwrap();
         }
         let edge = edge.build().unwrap();
-        let (tx, rx) = edge.into_split();
+        let (tx, rx) = edge.into_split(&pool);
 
         let resolver = Arc::new(futures::executor::block_on(async {
             config
@@ -108,18 +109,19 @@ impl Options {
         let tracker = RpcTracker::new(10, Notify::new());
 
         let sink = ServiceBuilder::new()
-            .layer(ToMessageService::new())
-            .layer(ChainLayer::new(ratelimit.service()))
-            .layer(ChainLayer::new(dispatch_service(resolver)))
-            .layer(ChainLayer::new(tracker.clone().service()))
-            .layer(corral.clone().layer())
-            .layer(tx.clone().layer(pool.clone()))
-            .service(SinkMessage::new());
-        let sink: PipelineService = BoxCloneSyncService::new(sink);
+            .layer(ToMessageService.into_layer())
+            .layer(ratelimit.into_filter())
+            .layer(resolver.clone().into_service().into_filter())
+            .layer(tracker.clone().into_filter())
+            .layer(corral.clone().into_filter())
+            .layer(tx.into_filter())
+            .service(SinkMessage)
+            .map_response(|_| ());
+        let sink: PipelineService =
+            BoxCloneSyncService::new(sink.into_tower());
 
         let options = config.take::<Options>().unwrap();
         Ok(Sidecar {
-            pool,
             rx: Some(rx),
             corral,
             sink,
@@ -159,7 +161,6 @@ impl Options {
 }
 
 pub struct Sidecar {
-    pool: BytesPool,
     rx: Option<kaze_edge::Receiver>,
     corral: Arc<Corral>,
     sink: PipelineService,
@@ -188,10 +189,8 @@ impl Sidecar {
     ) -> anyhow::Result<()> {
         let mut sink = self.sink.clone();
         loop {
-            let packet = rx
-                .read_packet(&self.pool)
-                .await
-                .context("failed to read packet")?;
+            let packet =
+                rx.read_packet().await.context("failed to read packet")?;
             sink.ready_call((packet, None)).await?;
         }
     }

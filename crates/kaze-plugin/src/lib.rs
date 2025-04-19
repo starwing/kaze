@@ -1,10 +1,12 @@
 mod clap_default;
+mod executor;
 mod local;
 
 pub mod graceful_exit;
 
 use std::sync::Arc;
 
+use executor::Executor;
 use tower::util::BoxCloneSyncService;
 
 use kaze_protocol::message::PacketWithAddr;
@@ -16,6 +18,7 @@ pub use serde;
 
 pub use kaze_protocol as protocol;
 pub use kaze_util as util;
+pub use kaze_service as service;
 
 pub use clap_default::ClapDefault;
 pub use local::*;
@@ -25,7 +28,8 @@ pub type PipelineService =
 
 pub type PipelineCell = CellService<PipelineService>;
 
-pub trait SubsystemHandle {
+pub trait Context {
+    fn executor(&self) -> &Executor;
     fn pipeline(&self) -> PipelineService;
     fn graceful_exit(&self) -> &graceful_exit::GracefulExit;
 }

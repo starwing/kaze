@@ -33,6 +33,10 @@ pub struct Options {
     #[arg(value_name = "DURATION")]
     pub interval: DurationString,
 
+    /// max timeout
+    #[arg(long = "total-timeout", value_name = "DURATION", default_value_t = default_timeout())]
+    pub timeout: DurationString,
+
     #[arg(skip)]
     pub per_msg: Vec<PerMsgLimitInfo>,
 }
@@ -42,6 +46,10 @@ impl Options {
     pub fn build(&self) -> Arc<RateLimit> {
         Arc::new(RateLimit::new(self))
     }
+}
+
+fn default_timeout() -> DurationString {
+    DurationString::from_str("1s").unwrap()
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -56,6 +64,9 @@ pub struct PerMsgLimitInfo {
 
     #[serde(default = "default_interval")]
     pub interval: DurationString,
+
+    #[serde(default = "default_timeout")]
+    pub timeout: DurationString,
 }
 
 fn default_interval() -> DurationString {

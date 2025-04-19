@@ -156,13 +156,13 @@ impl Channel {
         self.ptr
     }
 
-    /// Create a lock that will shutdown the channel when dropped
-    pub fn shutdown_lock(&self, mode: Mode) -> ShutdownGuard {
+    /// Create a guard that will shutdown the channel when dropped
+    pub fn shutdown_guard(&self, mode: Mode) -> ShutdownGuard {
         ShutdownGuard(self.ptr, mode)
     }
 
-    /// Create a lock that will unlink the shm file when dropped
-    pub fn unlink_lock(&self) -> UnlinkGuard {
+    /// Create a guard that will unlink the shm file when dropped
+    pub fn unlink_guard(&self) -> UnlinkGuard {
         let name = unsafe { CStr::from_ptr(ffi::kz_name(self.ptr)) }
             .to_string_lossy()
             .to_string();

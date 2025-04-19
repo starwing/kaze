@@ -2,17 +2,14 @@ use std::{borrow::Cow, net::Ipv4Addr, sync::Arc};
 
 use anyhow::{Context, Result, bail};
 use kaze_core::bytes::BufMut;
+use kaze_plugin::service::AsyncService;
 use kaze_protocol::packet::Packet;
 use metrics::counter;
 use tokio::{sync::Mutex, task::block_in_place};
-use tower::{Layer, layer::layer_fn, service_fn};
 use tracing::{info, warn};
 
 use kaze_core::{Channel, OwnedReadHalf, OwnedWriteHalf};
-use kaze_plugin::protocol::{
-    bytes::Buf, message::Message, packet::BytesPool, service::MessageService,
-};
-use kaze_plugin::util::tower_ext::ServiceExt as _;
+use kaze_plugin::protocol::{bytes::Buf, message::Message, packet::BytesPool};
 
 pub use kaze_core::Error;
 
@@ -70,15 +67,19 @@ impl Edge {
         self.ident
     }
 
-    pub fn into_split(self) -> (Sender, Receiver) {
+    pub fn into_split(self, pool: &BytesPool) -> (Sender, Receiver) {
         let (rx, tx) = self.channel.into_split();
-        (Sender::new(tx, self.ident), Receiver::new(rx))
+        (Sender::new(tx, self.ident, pool), Receiver::new(rx, pool))
     }
 
     pub fn unlink(prefix: impl AsRef<str>, ident: Ipv4Addr) -> Result<()> {
         let name = Self::get_channel_name(prefix, ident);
         info!("unlink queue: {}", name);
         Channel::unlink(&name).context("Failed to unlink completion queue")
+    }
+
+    pub fn unlink_guard(&self) -> kaze_core::UnlinkGuard {
+        self.channel.unlink_guard()
     }
 
     fn get_channel_name(prefix: impl AsRef<str>, ident: Ipv4Addr) -> String {
@@ -88,14 +89,18 @@ impl Edge {
 
 pub struct Receiver {
     rx: OwnedReadHalf,
+    pool: BytesPool,
 }
 
 impl Receiver {
-    pub fn new(rx: OwnedReadHalf) -> Self {
-        Self { rx }
+    pub fn new(rx: OwnedReadHalf, pool: &BytesPool) -> Self {
+        Self {
+            rx,
+            pool: pool.clone(),
+        }
     }
 
-    pub async fn read_packet(&mut self, pool: &BytesPool) -> Result<Packet> {
+    pub async fn read_packet(&mut self) -> Result<Packet> {
         let mut ctx = self
             .rx
             .read_context()
@@ -110,7 +115,7 @@ impl Receiver {
                 })
                 .context("kaze blocking wait completion error")?;
         }
-        let mut bytes = pool.pull_owned();
+        let mut bytes = self.pool.pull_owned();
         let buf = ctx.buffer();
         let len = buf.len();
         bytes.rewind();
@@ -135,13 +140,15 @@ impl Receiver {
 pub struct Sender {
     tx: Arc<Mutex<OwnedWriteHalf>>,
     ident: Ipv4Addr,
+    pool: BytesPool,
 }
 
 impl Sender {
-    fn new(tx: OwnedWriteHalf, ident: Ipv4Addr) -> Self {
+    fn new(tx: OwnedWriteHalf, ident: Ipv4Addr, pool: &BytesPool) -> Self {
         Self {
             tx: Arc::new(Mutex::new(tx)),
             ident,
+            pool: pool.clone(),
         }
     }
 
@@ -179,57 +186,59 @@ impl Sender {
         counter!("kaze_submission_bytes_total").increment(len as u64);
         Ok(())
     }
+}
 
-    pub fn service(self, pool: BytesPool) -> impl MessageService<()> {
-        service_fn(move |item: Message| {
-            let self_ref = self.clone();
-            let pool_ref = pool.clone();
-            async move { self_ref.send_buf(item.packet().as_buf(&pool_ref)).await }
-        })
-    }
+impl AsyncService<Message> for Sender {
+    type Response = Option<Message>;
+    type Error = anyhow::Error;
 
-    pub fn layer<S: MessageService<()>>(
-        self,
-        pool: BytesPool,
-    ) -> impl Layer<S, Service: MessageService<()>> {
-        let svc = self.service(pool);
-        layer_fn(move |inner: S| {
-            let svc = svc.clone();
-            service_fn(move |item: Message| {
-                let mut svc = svc.clone();
-                let mut inner = inner.clone();
-                async move {
-                    if item.destination().is_local() {
-                        return svc
-                            .ready_call(item)
-                            .await
-                            .context("send packet");
-                    }
-                    inner
-                        .ready_call(item)
-                        .await
-                        .context("failed to forward packet")
-                }
-            })
-        })
+    async fn serve(
+        &self,
+        msg: Message,
+    ) -> std::result::Result<Self::Response, Self::Error> {
+        if msg.destination().is_local() {
+            self.send_buf(msg.packet().as_buf(&self.pool)).await?;
+            return Ok(None);
+        }
+        Ok(Some(msg))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use kaze_protocol::{packet::new_bytes_pool, service::SinkMessage};
-    use tower::{Layer, ServiceExt};
+    use kaze_plugin::service::AsyncService;
+    use kaze_protocol::{
+        message::{Destination, Message, Source},
+        packet::{Packet, new_bytes_pool},
+        proto::{Hdr, RetCode},
+    };
 
     use crate::Options;
 
-    #[test]
-    fn test_send() {
-        let edge = Options::new().build().unwrap();
-        let (tx, _rx) = edge.into_split();
+    #[tokio::test]
+    async fn test_send() {
+        let edge = Options::new().with_unlink(true).build().unwrap();
+        let _guard = edge.unlink_guard();
         let pool = new_bytes_pool();
-        tx.clone().service(pool.clone()).boxed();
+        let (tx, _rx) = edge.into_split(&pool);
+        let r = tx
+            .serve(Message::new_with_destination(
+                Packet::from_retcode(Hdr::default(), RetCode::RetOk),
+                Source::Host,
+                Destination::Host,
+            ))
+            .await
+            .unwrap();
+        assert!(matches!(r, None));
 
-        let sink = SinkMessage::new();
-        tx.clone().layer(pool).layer(sink).boxed();
+        let r = tx
+            .serve(Message::new_with_destination(
+                Packet::from_retcode(Hdr::default(), RetCode::RetOk),
+                Source::Host,
+                Destination::Drop,
+            ))
+            .await
+            .unwrap();
+        assert!(matches!(r, Some(_)));
     }
 }

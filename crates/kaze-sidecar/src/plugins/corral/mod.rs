@@ -1,5 +1,5 @@
 mod corral;
-mod layer;
+mod service;
 mod options;
 
 pub use corral::Corral;

@@ -53,7 +53,7 @@ impl OwnedWriteHalf {
 
     /// Create a guard for shutdown the read part when dropped
     pub fn shutdown_lock(&self) -> ShutdownGuard {
-        self.channel.shutdown_lock(Mode::READ)
+        self.channel.shutdown_guard(Mode::READ)
     }
 
     /// Write data to the channel
@@ -107,7 +107,7 @@ impl OwnedReadHalf {
 
     /// Create a guard for shutdown the read part when dropped
     pub fn shutdown_lock(&self) -> ShutdownGuard {
-        self.channel.shutdown_lock(Mode::READ)
+        self.channel.shutdown_guard(Mode::READ)
     }
 
     /// Read data from the channel

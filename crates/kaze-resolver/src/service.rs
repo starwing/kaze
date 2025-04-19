@@ -1,34 +1,71 @@
+use kaze_plugin::service::AsyncService;
 use rand::Rng;
-use tower::service_fn;
 use tracing::error;
 
 use kaze_plugin::local_node;
 use kaze_plugin::protocol::{
     message::{Destination, Message, Node},
     proto::hdr::{DstMask, DstMulticast, RouteType},
-    service::MessageService,
 };
 
 use crate::Resolver;
 
-pub fn dispatch_service<R>(resolver: R) -> impl MessageService<Message>
+pub trait ResolverExt: Resolver {
+    fn into_service(self) -> ResolverService<Self>
+    where
+        Self: Clone,
+    {
+        ResolverService::new(self)
+    }
+}
+
+impl<R> ResolverExt for R where R: Resolver {}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ResolverService<Resolver> {
+    resolver: Resolver,
+}
+
+impl<T> ResolverService<T> {
+    pub fn new(resolver: T) -> Self {
+        Self { resolver }
+    }
+
+    pub fn resolver(&self) -> &T {
+        &self.resolver
+    }
+}
+
+impl<T> From<T> for ResolverService<T>
 where
-    R: Resolver + Clone,
+    T: Resolver,
 {
-    service_fn(move |mut msg: Message| {
+    fn from(resolver: T) -> Self {
+        Self { resolver }
+    }
+}
+
+impl<T> AsyncService<Message> for ResolverService<T>
+where
+    T: Resolver + Clone,
+{
+    type Response = Option<Message>;
+    type Error = anyhow::Error;
+
+    async fn serve(
+        &self,
+        mut msg: Message,
+    ) -> Result<Self::Response, Self::Error> {
         let route_type = msg.packet().hdr().route_type.clone();
-        let resolver = resolver.clone();
-        let dispatch = dispatch(route_type, resolver);
-        async move {
-            let Some(dst) = dispatch.await else {
-                // can not find route
-                error!(hdr = ?msg.packet().hdr(), "Can not find route");
-                return Ok::<_, anyhow::Error>(msg);
-            };
+        if let Some(dst) = dispatch(route_type, self.resolver.clone()).await {
             msg.set_destination(dst);
-            Ok(msg)
+        } else {
+            // can not find route
+            error!(hdr = ?msg.packet().hdr(), "Can not find route");
+            return Ok(None);
         }
-    })
+        Ok(Some(msg))
+    }
 }
 
 async fn dispatch(
@@ -114,8 +151,10 @@ async fn dispatch_multicast(
 mod tests {
     use std::sync::Arc;
 
-    use kaze_plugin::ClapDefault;
-    use tower::ServiceExt;
+    use kaze_plugin::{
+        ClapDefault,
+        protocol::{message::Source, packet::Packet, proto::Hdr},
+    };
 
     use crate::LocalOptions;
 
@@ -123,7 +162,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_send() {
-        let resolver = Arc::new(LocalOptions::default().build().await);
-        dispatch_service(resolver).boxed();
+        let resolver: ResolverService<_> =
+            Arc::new(LocalOptions::default().build().await).into();
+        assert!(
+            resolver
+                .serve(Message::new(
+                    Packet::from_hdr(Hdr::default()),
+                    Source::Host
+                ))
+                .await
+                .is_ok()
+        );
     }
 }

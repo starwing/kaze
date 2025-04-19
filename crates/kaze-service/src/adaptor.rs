@@ -6,20 +6,10 @@ use std::{
 };
 
 use parking_lot::Mutex;
-use tokio_util::sync::ReusableBoxFuture;
 use tower::Service;
 
-pub trait AsyncService<Request> {
-    type Response;
-    type Error;
+use super::{AsyncService, reusable_box::ReusableBoxFuture};
 
-    fn call(
-        &self,
-        req: Request,
-    ) -> impl Future<Output = Result<Self::Response, Self::Error>> + Send + 'static;
-}
-
-#[derive(Clone)]
 pub struct AsyncServiceAdaptor<S, T>
 where
     S: AsyncService<T>,
@@ -28,6 +18,18 @@ where
 {
     service: S,
     state: Arc<Mutex<SharedState<S::Response, S::Error>>>,
+}
+
+impl<S: Clone, T> Clone for AsyncServiceAdaptor<S, T>
+where
+    S: AsyncService<T>,
+{
+    fn clone(&self) -> Self {
+        Self {
+            service: self.service.clone(),
+            state: self.state.clone(),
+        }
+    }
 }
 
 impl<S, T> AsyncServiceAdaptor<S, T>
@@ -63,11 +65,13 @@ where
     }
 
     fn call(&mut self, req: T) -> Self::Future {
-        let mut state = self.state.lock();
+        let state = self.state.clone();
+        let mut state = state.lock_arc();
         if state.in_flight {
             panic!("Service must be ready before calling");
         }
-        state.set(self.service.call(req));
+        let fut = self.service.serve(req);
+        state.set(fut);
         AdaptorFuture {
             state: self.state.clone(),
         }
@@ -77,7 +81,7 @@ where
 struct SharedState<R: 'static, E: 'static> {
     in_flight: bool,
     waker: Option<Waker>,
-    future: ReusableBoxFuture<'static, Result<R, E>>,
+    future: ReusableBoxFuture<Result<R, E>>,
 }
 
 impl<R, E> SharedState<R, E> {
@@ -89,10 +93,7 @@ impl<R, E> SharedState<R, E> {
         }
     }
 
-    fn set(
-        &mut self,
-        future: impl Future<Output = Result<R, E>> + Send + 'static,
-    ) {
+    fn set(&mut self, future: impl Future<Output = Result<R, E>> + Send) {
         self.in_flight = true;
         self.future.set(future);
     }
@@ -146,11 +147,10 @@ mod tests {
         type Response = usize;
         type Error = Infallible;
 
-        fn call(
+        fn serve(
             &self,
             req: String,
-        ) -> impl Future<Output = Result<usize, Infallible>> + 'static
-        {
+        ) -> impl Future<Output = Result<usize, Infallible>> {
             async move { Ok(req.len()) }
         }
     }
@@ -164,16 +164,10 @@ mod tests {
         type Response = String;
         type Error = Infallible;
 
-        fn call(
-            &self,
-            req: String,
-        ) -> impl Future<Output = Result<String, Infallible>> + 'static
-        {
+        async fn serve(&self, req: String) -> Result<String, Infallible> {
             let delay = self.delay_ms;
-            async move {
-                tokio::time::sleep(Duration::from_millis(delay)).await;
-                Ok(req)
-            }
+            tokio::time::sleep(Duration::from_millis(delay)).await;
+            Ok(req)
         }
     }
 
@@ -184,16 +178,11 @@ mod tests {
         type Response = String;
         type Error = String;
 
-        fn call(
-            &self,
-            req: String,
-        ) -> impl Future<Output = Result<String, String>> + 'static {
-            async move {
-                if req == "fail" {
-                    Err("Request failed".to_string())
-                } else {
-                    Ok(req)
-                }
+        async fn serve(&self, req: String) -> Result<String, String> {
+            if req == "fail" {
+                Err("Request failed".to_string())
+            } else {
+                Ok(req)
             }
         }
     }
@@ -220,16 +209,10 @@ mod tests {
         type Response = usize;
         type Error = Infallible;
 
-        fn call(
-            &self,
-            req: String,
-        ) -> impl Future<Output = Result<usize, Infallible>> + 'static
-        {
+        async fn serve(&self, req: String) -> Result<usize, Infallible> {
             let count = self.count.clone();
-            async move {
-                count.fetch_add(1, Ordering::SeqCst);
-                Ok(req.len())
-            }
+            count.fetch_add(1, Ordering::SeqCst);
+            Ok(req.len())
         }
     }
 

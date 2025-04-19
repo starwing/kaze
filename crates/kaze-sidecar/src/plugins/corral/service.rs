@@ -2,62 +2,47 @@ use std::{io::IoSlice, sync::Arc};
 
 use anyhow::Context as _;
 use futures::future::join_all;
+use kaze_plugin::service::OwnedAsyncService;
 use tokio::io::AsyncWriteExt;
-use tower::{Layer, layer::layer_fn, service_fn};
 use tracing::error;
 
-use kaze_plugin::protocol::{
-    message::{Destination, Message, Node, PacketWithAddr},
-    service::MessageService,
+use kaze_plugin::protocol::message::{
+    Destination, Message, Node, PacketWithAddr,
 };
-use kaze_plugin::util::tower_ext::ServiceExt as _;
 
 use super::Corral;
 
-impl Corral {
-    pub fn layer<S>(
-        self: Arc<Corral>,
-    ) -> impl Layer<S, Service: MessageService<()>>
-    where
-        S: MessageService<()>,
-    {
-        layer_fn(move |inner: S| {
-            let corral = self.clone();
-            service_fn(move |item: Message| {
-                let corral = corral.clone();
-                let inner = inner.clone();
-                async move {
-                    if !item.destination().is_remote() {
-                        return inner
-                            .clone()
-                            .ready_call(item)
-                            .await
-                            .context("failed to forward packet");
-                    }
-                    let (item, dst) = item.split();
-                    match dst {
-                        Destination::Node(node) => {
-                            corral_send(corral, item, node).await
-                        }
-                        Destination::NodeList(nodes) => {
-                            corral_broadcast(corral, item, nodes).await
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-            })
-        })
+impl OwnedAsyncService<Message> for Corral {
+    type Response = Option<Message>;
+    type Error = anyhow::Error;
+
+    async fn serve(
+        self: Arc<Self>,
+        msg: Message,
+    ) -> anyhow::Result<Self::Response> {
+        if !msg.destination().is_remote() {
+            return Ok(Some(msg));
+        }
+        let (item, dst) = msg.split();
+        match dst {
+            Destination::Node(node) => corral_send(&self, item, node).await?,
+            Destination::NodeList(nodes) => {
+                corral_broadcast(&self, item, nodes).await?
+            }
+            _ => unreachable!(),
+        };
+        Ok(None)
     }
 }
 
 async fn corral_send(
-    corral: Arc<Corral>,
+    corral: &Arc<Corral>,
     item: PacketWithAddr,
     dst: Node,
 ) -> Result<(), anyhow::Error> {
     let (packet, _) = item;
     corral_send_raw(
-        corral.clone(),
+        &corral,
         &packet.as_iovec(corral.bytes_pool()).to_iovec(),
         dst,
     )
@@ -66,7 +51,7 @@ async fn corral_send(
 }
 
 async fn corral_broadcast(
-    corral: Arc<Corral>,
+    corral: &Arc<Corral>,
     item: PacketWithAddr,
     dst_list: Vec<Node>,
 ) -> Result<(), anyhow::Error> {
@@ -76,7 +61,7 @@ async fn corral_broadcast(
     let task = join_all(
         dst_list
             .into_iter()
-            .map(|node| corral_send_raw(corral.clone(), &iovec, node)),
+            .map(|node| corral_send_raw(corral, &iovec, node)),
     )
     .await;
     let mut errors = Vec::new();
@@ -92,7 +77,7 @@ async fn corral_broadcast(
 }
 
 async fn corral_send_raw(
-    corral: Arc<Corral>,
+    corral: &Arc<Corral>,
     iovec: &[IoSlice<'_>],
     dst: Node,
 ) -> Result<(), anyhow::Error> {

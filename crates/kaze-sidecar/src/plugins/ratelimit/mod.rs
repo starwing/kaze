@@ -1,31 +1,56 @@
 mod options;
 
+use futures::future::OptionFuture;
 use leaky_bucket::RateLimiter;
-use std::sync::Arc;
-use tower::service_fn;
+use std::{sync::Arc, time::Duration};
+use tokio::{join, select};
+use tracing::error;
 
 use kaze_plugin::{
-    protocol::{message::Message, service::MessageService},
+    protocol::message::Message, service::OwnedAsyncService,
     util::parser::DurationString,
 };
 
 pub use options::Options;
 
 pub struct RateLimit {
-    total: Option<RateLimiter>,
-    per_msg: papaya::HashMap<LimitKey, RateLimiter>,
+    total: Option<RateLimitInfo>,
+    per_msg: papaya::HashMap<LimitKey, RateLimitInfo>,
+}
+
+pub struct RateLimitInfo {
+    lim: RateLimiter,
+    timeout: Duration,
+}
+
+impl RateLimitInfo {
+    async fn acquire_one(&self) -> bool {
+        select! {
+            _ = tokio::time::sleep(self.timeout) => {
+                false // timeout
+            }
+            _ = self.lim.acquire_one() => {
+                true // acquired
+            }
+        }
+    }
 }
 
 impl RateLimit {
-    fn new(conf: &Options) -> Self {
+    fn new(opt: &Options) -> Self {
         Self {
-            total: conf.max.map(|max| {
-                let initial =
-                    if conf.initial == 0 { max } else { conf.initial };
-                let refill = if conf.refill == 0 { max } else { conf.refill };
-                Self::new_limiter(max, initial, refill, conf.interval)
+            total: opt.max.map(|max| {
+                let initial = if opt.initial == 0 { max } else { opt.initial };
+                let refill = if opt.refill == 0 { max } else { opt.refill };
+                Self::new_limiter(
+                    max,
+                    initial,
+                    refill,
+                    opt.interval,
+                    opt.timeout,
+                )
             }),
-            per_msg: conf
+            per_msg: opt
                 .per_msg
                 .iter()
                 .map(|info| {
@@ -39,6 +64,7 @@ impl RateLimit {
                             info.initial,
                             info.refill,
                             info.interval,
+                            info.timeout,
                         ),
                     )
                 })
@@ -51,72 +77,71 @@ impl RateLimit {
         initial: usize,
         refill: usize,
         interval: DurationString,
-    ) -> RateLimiter {
-        RateLimiter::builder()
-            .max(max)
-            .initial(initial)
-            .refill(refill)
-            .interval(interval.into())
-            .build()
+        timeout: DurationString,
+    ) -> RateLimitInfo {
+        RateLimitInfo {
+            lim: RateLimiter::builder()
+                .max(max)
+                .initial(initial)
+                .refill(refill)
+                .interval(interval.into())
+                .build(),
+            timeout: timeout.into(),
+        }
     }
 
-    pub async fn acquire_one(&self, ident: u32, body_type: &String) {
-        if let Some(limiter) = &self.total {
-            limiter.acquire_one().await;
+    pub async fn acquire_one(&self, ident: u32, body_type: &String) -> bool {
+        if let Some(info) = &self.total {
+            if !info.acquire_one().await {
+                return false; // timeout
+            }
         }
         let map = self.per_msg.pin_owned();
         if map.len() == 0 {
-            return;
+            return true;
         }
         let ident = Some(ident);
         let body_type = Some(body_type.clone());
         let key1 = LimitKey(ident, None);
-        if let Some(limiter) = map.get(&key1) {
-            limiter.acquire_one().await;
-        }
+        let fut1 = map.get(&key1).map(|limiter| limiter.acquire_one());
         let key2 = LimitKey(None, body_type);
-        if let Some(limiter) = map.get(&key2) {
-            limiter.acquire_one().await;
-        }
+        let fut2 = map.get(&key2).map(|limiter| limiter.acquire_one());
         let key3 = LimitKey(key1.0, key2.1);
-        if let Some(limiter) = map.get(&key3) {
-            limiter.acquire_one().await;
-        }
+        let fut3 = map.get(&key3).map(|limiter| limiter.acquire_one());
+        let (r1, r2, r3) = join!(
+            OptionFuture::from(fut1),
+            OptionFuture::from(fut2),
+            OptionFuture::from(fut3)
+        );
+        r1 != Some(false) && r2 != Some(false) && r3 != Some(false)
     }
 }
 
-impl RateLimit {
-    pub fn service(self: Arc<Self>) -> impl MessageService<Message> {
-        service_fn(move |req: Message| self.clone().handle_request(req))
-    }
+impl OwnedAsyncService<Message> for RateLimit {
+    type Response = Option<Message>;
+    type Error = anyhow::Error;
 
-    async fn handle_request(
+    async fn serve(
         self: Arc<Self>,
-        req: Message,
-    ) -> Result<Message, anyhow::Error> {
-        if !req.destination().is_local() {
-            return Ok(req);
+        msg: Message,
+    ) -> anyhow::Result<Self::Response> {
+        if !msg.destination().is_local() {
+            return Ok(Some(msg));
         }
-        let ident = req.source().ident();
-        let body_type = &req.packet().hdr().body_type;
-        self.acquire_one(ident, body_type).await;
-        Ok(req)
+        let ident = msg.source().ident();
+        let body_type = &msg.packet().hdr().body_type;
+        if self.acquire_one(ident, body_type).await {
+            Ok(Some(msg))
+        } else {
+            error!(
+                ident = ?ident,
+                body_type = ?body_type,
+                "Rate limit timeout"
+            );
+            Ok(None)
+        }
     }
 }
 
 #[derive(Hash, Eq, PartialEq)]
 struct LimitKey(Option<u32>, Option<String>);
-
-#[cfg(test)]
-mod tests {
-    use kaze_plugin::ClapDefault;
-    use tower::ServiceExt as _;
-
-    use super::*;
-
-    #[test]
-    fn test_send() {
-        let rl = Options::default().build();
-        rl.service().boxed();
-    }
-}

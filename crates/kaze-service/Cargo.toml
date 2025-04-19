@@ -1,0 +1,12 @@
+[package]
+name = "kaze-service"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tower.workspace = true
+parking_lot.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true
+tokio = { workspace = true, features = ["time", "macros", "rt-multi-thread"] }

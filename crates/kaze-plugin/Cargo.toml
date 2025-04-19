@@ -4,10 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-anyhow = "1.0.97"
-clap = { version = "4.5.35", features = ["derive"] }
-serde = { version = "1.0.219", features = ["derive"] }
-tokio = "1.44.2"
-tower = "0.5.2"
-kaze-protocol = { path = "../kaze-protocol" }
-kaze-util = { path = "../kaze-util" }
+anyhow.workspace = true
+clap.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+tokio-graceful.workspace = true
+tokio-shutdown.workspace = true
+tokio.workspace = true
+tower.workspace = true
+#
+kaze-protocol.workspace = true
+kaze-service.workspace = true
+kaze-util.workspace = true

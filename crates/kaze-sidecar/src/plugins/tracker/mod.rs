@@ -1,17 +1,17 @@
-use std::sync::{Arc, atomic::AtomicU32};
+use std::sync::{atomic::AtomicU32, Arc};
 use std::time::Duration;
 
 use anyhow::Result;
 use futures::StreamExt;
+use kaze_plugin::service::OwnedAsyncService;
 use kaze_plugin::{PipelineCell, PipelineRequired};
 use metrics::counter;
 use papaya::HashMap;
-use thingbuf::Recycle;
 use thingbuf::mpsc::{Receiver, Sender};
+use thingbuf::Recycle;
 use tokio::{select, sync::Notify};
 use tokio_util::time::delay_queue::Expired;
-use tokio_util::time::{DelayQueue, delay_queue::Key};
-use tower::service_fn;
+use tokio_util::time::{delay_queue::Key, DelayQueue};
 use tracing::error;
 
 use kaze_plugin::{
@@ -20,10 +20,9 @@ use kaze_plugin::{
         message::Message,
         packet::Packet,
         proto::{
-            Hdr, RetCode,
             hdr::{self, RouteType},
+            Hdr, RetCode,
         },
-        service::MessageService,
     },
     util::tower_ext::ServiceExt,
 };
@@ -129,13 +128,23 @@ impl RpcTracker {
     }
 }
 
-impl RpcTracker {
-    pub fn service<'a>(
-        self: Arc<Self>,
-    ) -> impl MessageService<Message> + use<> {
-        service_fn(move |req: Message| self.clone().record(req))
-    }
+impl OwnedAsyncService<Message> for RpcTracker {
+    type Response = Option<Message>;
+    type Error = anyhow::Error;
 
+    async fn serve(
+        self: Arc<Self>,
+        msg: Message,
+    ) -> anyhow::Result<Self::Response> {
+        let res = self.record(msg).await;
+        if let Err(e) = res {
+            error!(error = %e, "Failed to record rpc info");
+        }
+        Ok(None)
+    }
+}
+
+impl RpcTracker {
     async fn record(self: Arc<Self>, mut req: Message) -> Result<Message> {
         // 1. return req as res if no timeout
         let timeout = req.packet().hdr().timeout;
@@ -191,15 +200,16 @@ mod tests {
     use tower::util::BoxCloneSyncService;
 
     use hdr::RpcType;
-    use kaze_plugin::protocol::message::{
-        Destination, PacketWithAddr, Source,
+    use kaze_plugin::{
+        protocol::message::{Destination, PacketWithAddr, Source},
+        service::{async_service_fn, ServiceExt},
     };
 
     #[tokio::test]
     async fn test_rpc_tracker() {
         let notify = Arc::new(Notify::new());
         let ntf_clone = notify.clone();
-        let sink = service_fn(move |m: PacketWithAddr| {
+        let sink = async_service_fn(move |m: PacketWithAddr| {
             let ntf_clone = ntf_clone.clone();
             async move {
                 let (packet, _) = m;
@@ -208,7 +218,8 @@ mod tests {
                 ntf_clone.notify_one();
                 Ok::<_, anyhow::Error>(())
             }
-        });
+        })
+        .into_tower();
         let sink = BoxCloneSyncService::new(sink);
         let tracker = RpcTracker::new(10, Notify::new());
         tracker.sink().set(sink);

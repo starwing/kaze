@@ -5,16 +5,16 @@ edition = "2024"
 build = "build.rs"
 
 [dependencies]
-anyhow = "1.0.97"
-lockfree-object-pool = "0.1.6"
-prost = "0.13.5"
-tokio-util = { version = "0.7.14", features = ["codec"] }
-tracing = "0.1.41"
-futures = "0.3.31"
-tower = "0.5.2"
-
-[dependencies.kaze-util]
-path = "../kaze-util"
+anyhow.workspace = true
+lockfree-object-pool.workspace = true
+prost.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+futures.workspace = true
+tower.workspace = true
+#
+kaze-service.workspace = true
+kaze-util.workspace = true
 
 [build-dependencies]
 prost-build = "0.13.5"

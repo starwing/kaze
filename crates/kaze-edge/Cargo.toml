@@ -4,22 +4,16 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-anyhow = "1.0.97"
-metrics = "0.24.1"
-tokio = { version = "1.44.2", features = ["rt-multi-thread"] }
-tracing = "0.1.41"
-page_size = "0.6.0"
-tower = "0.5.2"
+anyhow.workspace = true
+metrics.workspace = true
+page_size.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+tower.workspace = true
+tracing.workspace = true
+#
+kaze-core.workspace = true
+kaze-plugin.workspace = true
+kaze-protocol.workspace = true
 
-[dependencies.kaze-plugin]
-path = "../kaze-plugin"
-
-[dependencies.kaze-core]
-path = "../kaze-core"
-
-[dependencies.kaze-protocol]
-path = "../kaze-protocol"
-
-[dev-dependencies.tokio]
-version = "1.44.2"
-features = ["time", "macros", "rt-multi-thread"]
+[dev-dependencies]
+tokio = { workspace = true, features = ["time", "macros", "rt-multi-thread"] }
