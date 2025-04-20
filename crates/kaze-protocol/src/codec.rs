@@ -1,4 +1,7 @@
-use std::io::{Error, ErrorKind};
+use std::{
+    fmt::Debug,
+    io::{Error, ErrorKind},
+};
 
 use anyhow::{Context, Result, bail};
 use prost::Message;
@@ -68,6 +71,12 @@ impl<'a> Decoder for NetPacketDecoder {
 pub struct NetPacketCodec {
     decoder: NetPacketDecoder,
     pool: BytesPool,
+}
+
+impl Debug for NetPacketCodec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NetPacketCodec").finish()
+    }
 }
 
 impl NetPacketCodec {

@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use kaze_plugin::{
     clap::Args,
-    protocol::packet::BytesPool,
     serde::{Deserialize, Serialize},
     util::parser::{self, DurationString},
 };
@@ -35,8 +34,8 @@ pub struct Options {
 }
 
 impl Options {
-    pub fn build(self, pool: BytesPool) -> Arc<Corral> {
-        Corral::new(self, pool)
+    pub fn build(self) -> Arc<Corral> {
+        Corral::new(self)
     }
 }
 

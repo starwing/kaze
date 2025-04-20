@@ -1,12 +1,9 @@
 mod clap_default;
-mod executor;
+mod context;
 mod local;
 
-pub mod graceful_exit;
+use std::{any::Any, sync::Arc};
 
-use std::sync::Arc;
-
-use executor::Executor;
 use tower::util::BoxCloneSyncService;
 
 use kaze_protocol::message::PacketWithAddr;
@@ -15,12 +12,14 @@ use kaze_util::tower_ext::CellService;
 pub use anyhow;
 pub use clap;
 pub use serde;
+pub use tokio_graceful;
 
 pub use kaze_protocol as protocol;
-pub use kaze_util as util;
 pub use kaze_service as service;
+pub use kaze_util as util;
 
 pub use clap_default::ClapDefault;
+pub use context::*;
 pub use local::*;
 
 pub type PipelineService =
@@ -28,22 +27,59 @@ pub type PipelineService =
 
 pub type PipelineCell = CellService<PipelineService>;
 
-pub trait Context {
-    fn executor(&self) -> &Executor;
-    fn pipeline(&self) -> PipelineService;
-    fn graceful_exit(&self) -> &graceful_exit::GracefulExit;
+/// a trait that inits the plugin, and provides a context to the plugin.
+pub trait Plugin: AnyClone + Send + Sync + 'static {
+    fn init(&self, context: Context);
+    fn context(&self) -> &Context;
 }
 
-/// a trait that require a pipeline service, implemented by all plugins that
-/// need a pipeline service. These plugins can contain a PipelineCell itself,
-/// and implement this trait. the real pipeline service will be filled in before
-/// sidecar is started.
-pub trait PipelineRequired {
-    fn sink(&self) -> &PipelineCell;
+pub trait ArcPlugin: Send + Sync + 'static {
+    fn init(self: &Arc<Self>, context: Context);
+    fn context(self: &Arc<Self>) -> &Context;
 }
 
-impl<T: PipelineRequired> PipelineRequired for Arc<T> {
-    fn sink(&self) -> &PipelineCell {
-        self.as_ref().sink()
+impl<T> Plugin for Arc<T>
+where
+    T: 'static + ArcPlugin,
+{
+    fn init(&self, context: Context) {
+        self.init(context);
+    }
+    fn context(&self) -> &Context {
+        self.context()
+    }
+}
+
+pub trait AnyClone: Send + Sync + 'static {
+    fn clone_box(&self) -> Box<dyn Plugin>;
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+    fn into_any(self: Box<Self>) -> Box<dyn Any>;
+}
+
+impl<T> AnyClone for T
+where
+    T: 'static + Plugin + Clone,
+{
+    fn clone_box(&self) -> Box<dyn Plugin> {
+        Box::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+}
+
+impl Clone for Box<dyn Plugin> {
+    fn clone(&self) -> Self {
+        (**self).clone_box()
     }
 }

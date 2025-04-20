@@ -1,15 +1,19 @@
-use std::{borrow::Cow, net::Ipv4Addr, sync::Arc};
+use std::{
+    borrow::Cow,
+    net::Ipv4Addr,
+    sync::{Arc, OnceLock},
+};
 
 use anyhow::{Context, Result, bail};
 use kaze_core::bytes::BufMut;
-use kaze_plugin::service::AsyncService;
+use kaze_plugin::{Plugin, service::AsyncService};
 use kaze_protocol::packet::Packet;
 use metrics::counter;
 use tokio::{sync::Mutex, task::block_in_place};
 use tracing::{info, warn};
 
 use kaze_core::{Channel, OwnedReadHalf, OwnedWriteHalf};
-use kaze_plugin::protocol::{bytes::Buf, message::Message, packet::BytesPool};
+use kaze_plugin::protocol::{bytes::Buf, message::Message};
 
 pub use kaze_core::Error;
 
@@ -67,9 +71,9 @@ impl Edge {
         self.ident
     }
 
-    pub fn into_split(self, pool: &BytesPool) -> (Sender, Receiver) {
+    pub fn into_split(self) -> (Sender, Receiver) {
         let (rx, tx) = self.channel.into_split();
-        (Sender::new(tx, self.ident, pool), Receiver::new(rx, pool))
+        (Sender::new(tx, self.ident), Receiver::new(rx))
     }
 
     pub fn unlink(prefix: impl AsRef<str>, ident: Ipv4Addr) -> Result<()> {
@@ -87,16 +91,17 @@ impl Edge {
     }
 }
 
+#[derive(Clone)]
 pub struct Receiver {
+    ctx: OnceLock<kaze_plugin::Context>,
     rx: OwnedReadHalf,
-    pool: BytesPool,
 }
 
 impl Receiver {
-    pub fn new(rx: OwnedReadHalf, pool: &BytesPool) -> Self {
+    pub fn new(rx: OwnedReadHalf) -> Self {
         Self {
             rx,
-            pool: pool.clone(),
+            ctx: OnceLock::new(),
         }
     }
 
@@ -115,7 +120,7 @@ impl Receiver {
                 })
                 .context("kaze blocking wait completion error")?;
         }
-        let mut bytes = self.pool.pull_owned();
+        let mut bytes = self.context().pool().pull_owned();
         let buf = ctx.buffer();
         let len = buf.len();
         bytes.rewind();
@@ -136,19 +141,34 @@ impl Receiver {
     }
 }
 
+impl Plugin for Receiver {
+    fn init(&self, ctx: kaze_plugin::Context) {
+        self.ctx.set(ctx).unwrap();
+    }
+    fn context(&self) -> &kaze_plugin::Context {
+        self.ctx.get().unwrap()
+    }
+}
+
 #[derive(Clone)]
 pub struct Sender {
-    tx: Arc<Mutex<OwnedWriteHalf>>,
+    inner: Arc<SenderInner>,
     ident: Ipv4Addr,
-    pool: BytesPool,
+}
+
+struct SenderInner {
+    ctx: OnceLock<kaze_plugin::Context>,
+    tx: Mutex<OwnedWriteHalf>,
 }
 
 impl Sender {
-    fn new(tx: OwnedWriteHalf, ident: Ipv4Addr, pool: &BytesPool) -> Self {
+    fn new(tx: OwnedWriteHalf, ident: Ipv4Addr) -> Self {
         Self {
-            tx: Arc::new(Mutex::new(tx)),
             ident,
-            pool: pool.clone(),
+            inner: Arc::new(SenderInner {
+                ctx: OnceLock::new(),
+                tx: Mutex::new(tx),
+            }),
         }
     }
 
@@ -157,11 +177,11 @@ impl Sender {
     }
 
     pub async fn lock(&self) -> kaze_core::ShutdownGuard {
-        self.tx.lock().await.shutdown_lock()
+        self.inner.tx.lock().await.shutdown_lock()
     }
 
     pub async fn send_buf(&self, data: impl Buf) -> Result<()> {
-        let tx = self.tx.lock().await;
+        let tx = self.inner.tx.lock().await;
         let mut ctx = tx
             .write_context(data.remaining())
             .context("Failed to create write context")?;
@@ -197,10 +217,22 @@ impl AsyncService<Message> for Sender {
         msg: Message,
     ) -> std::result::Result<Self::Response, Self::Error> {
         if msg.destination().is_local() {
-            self.send_buf(msg.packet().as_buf(&self.pool)).await?;
+            self.send_buf(
+                msg.packet().as_buf(&self.inner.ctx.get().unwrap().pool()),
+            )
+            .await?;
             return Ok(None);
         }
         Ok(Some(msg))
+    }
+}
+
+impl Plugin for Sender {
+    fn init(&self, ctx: kaze_plugin::Context) {
+        self.inner.ctx.set(ctx).unwrap();
+    }
+    fn context(&self) -> &kaze_plugin::Context {
+        self.inner.ctx.get().unwrap()
     }
 }
 
@@ -209,7 +241,7 @@ mod tests {
     use kaze_plugin::service::AsyncService;
     use kaze_protocol::{
         message::{Destination, Message, Source},
-        packet::{Packet, new_bytes_pool},
+        packet::Packet,
         proto::{Hdr, RetCode},
     };
 
@@ -219,8 +251,10 @@ mod tests {
     async fn test_send() {
         let edge = Options::new().with_unlink(true).build().unwrap();
         let _guard = edge.unlink_guard();
-        let pool = new_bytes_pool();
-        let (tx, _rx) = edge.into_split(&pool);
+        let (tx, _rx) = edge.into_split();
+        kaze_plugin::Context::builder()
+            .register(tx.clone())
+            .build_mock();
         let r = tx
             .serve(Message::new_with_destination(
                 Packet::from_retcode(Hdr::default(), RetCode::RetOk),

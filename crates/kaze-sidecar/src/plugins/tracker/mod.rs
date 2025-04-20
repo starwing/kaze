@@ -1,10 +1,11 @@
+use std::sync::OnceLock;
 use std::sync::{atomic::AtomicU32, Arc};
 use std::time::Duration;
 
 use anyhow::Result;
 use futures::StreamExt;
 use kaze_plugin::service::OwnedAsyncService;
-use kaze_plugin::{PipelineCell, PipelineRequired};
+use kaze_plugin::{ArcPlugin, Context};
 use metrics::counter;
 use papaya::HashMap;
 use thingbuf::mpsc::{Receiver, Sender};
@@ -24,7 +25,6 @@ use kaze_plugin::{
             Hdr, RetCode,
         },
     },
-    util::tower_ext::ServiceExt,
 };
 
 /// RpcTracker is a service that tracks rpc info.
@@ -34,7 +34,7 @@ pub struct RpcTracker {
     rpc_map: HashMap<u32, Info>,
     seq: AtomicU32,
     tx: Sender<Action, ActionRecycler>,
-    sink: PipelineCell,
+    ctx: OnceLock<Context>,
 }
 
 enum Action {
@@ -55,9 +55,12 @@ impl Recycle<Action> for ActionRecycler {
     }
 }
 
-impl PipelineRequired for RpcTracker {
-    fn sink(&self) -> &PipelineCell {
-        &self.sink
+impl ArcPlugin for RpcTracker {
+    fn init(self: &Arc<Self>, context: kaze_plugin::Context) {
+        self.ctx.set(context).unwrap();
+    }
+    fn context(self: &Arc<Self>) -> &Context {
+        self.ctx.get().unwrap()
     }
 }
 
@@ -65,10 +68,10 @@ impl RpcTracker {
     pub fn new(capacity: usize, notify: Notify) -> Arc<Self> {
         let (tx, rx) = thingbuf::mpsc::with_recycle(capacity, ActionRecycler);
         let obj = Arc::new(Self {
+            ctx: OnceLock::new(),
             rpc_map: HashMap::new(),
             seq: AtomicU32::new(114514),
             tx,
-            sink: PipelineCell::new(),
         });
         tokio::spawn(obj.clone().run(rx, notify));
         obj
@@ -103,13 +106,13 @@ impl RpcTracker {
                     }
                 }
                 Some(Action::Expired(key)) => {
-                    self.handle_expired(self.sink.clone(), key.get_ref()).await
+                    self.handle_expired(self.context(), key.get_ref()).await
                 }
             }
         }
     }
 
-    async fn handle_expired(&self, mut sink: PipelineCell, key: &u32) {
+    async fn handle_expired(&self, ctx: &Context, key: &u32) {
         let msg = {
             let rpc_map = self.rpc_map.pin();
             let Some(rpc_info) = rpc_map.get(key) else {
@@ -121,7 +124,7 @@ impl RpcTracker {
             hdr.route_type = Some(RouteType::DstIdent(local_ident));
             Packet::from_retcode(hdr, RetCode::RetTimeout)
         };
-        if let Err(e) = sink.ready_call((msg, None)).await {
+        if let Err(e) = ctx.raw_send((msg, None)).await {
             counter!("kaze_send_timeout_errors_total").increment(1);
             error!(error = %e, "Error sending timeout response");
         }
@@ -222,7 +225,8 @@ mod tests {
         .into_tower();
         let sink = BoxCloneSyncService::new(sink);
         let tracker = RpcTracker::new(10, Notify::new());
-        tracker.sink().set(sink);
+        let ctx = Context::builder().register(tracker.clone()).build_mock();
+        ctx.raw_sink().set(sink);
         let msg = Message::new_with_destination(
             Packet::from_hdr(Hdr {
                 body_type: "test".into(),

@@ -924,6 +924,7 @@ dependencies = [
  "kaze-protocol",
  "kaze-service",
  "kaze-util",
+ "papaya",
  "parking_lot",
  "serde",
  "tokio",

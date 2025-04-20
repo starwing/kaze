@@ -1,9 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use kaze_plugin::{
-        service::ServiceExt, ClapDefault as _, PipelineService,
+        service::ServiceExt, tokio_graceful::Shutdown, ClapDefault as _,
+        Context, PipelineService,
     };
     use kaze_resolver::ResolverExt;
     use scopeguard::defer;
@@ -12,37 +11,38 @@ mod tests {
 
     use crate::plugins::{corral, ratelimit, tracker::RpcTracker};
     use kaze_plugin::protocol::{
-        packet::{new_bytes_pool, Packet},
+        packet::Packet,
         proto::Hdr,
         service::{SinkMessage, ToMessageService},
     };
     use kaze_plugin::util::tower_ext::ServiceExt as _;
-    use kaze_plugin::PipelineRequired;
 
     #[tokio::test]
     async fn test_builder() {
+        let signal = tokio::time::sleep(std::time::Duration::from_millis(100));
+
         let edge = kaze_edge::Options {
             name: "sidecar_test".to_string(),
             ident: "127.0.0.1".parse().unwrap(),
             unlink: true,
             ..kaze_edge::Options::new()
         };
+
         let (prefix, ident) = (edge.name.clone(), edge.ident);
         defer! {
             kaze_edge::Edge::unlink(prefix, ident).unwrap();
         }
         let edge = dbg!(edge).build().unwrap();
-        let pool = new_bytes_pool();
-        let (tx, _rx) = edge.into_split(&pool);
+        let (tx, rx) = edge.into_split();
 
-        let resolver = Arc::new(kaze_resolver::local::Local::new());
+        let resolver = kaze_resolver::local::Local::new();
         let ratelimit = ratelimit::Options::default().build();
-        let corral = corral::Options::default().build(pool.clone());
+        let corral = corral::Options::default().build();
         let tracker = RpcTracker::new(10, Notify::new());
 
         let sink = ServiceBuilder::new()
             .layer(ToMessageService.into_layer())
-            .layer(ratelimit.into_filter())
+            .layer(ratelimit.clone().into_filter())
             .layer(resolver.clone().into_service().into_filter())
             .layer(tracker.clone().into_filter())
             .layer(corral.clone().into_filter())
@@ -55,7 +55,20 @@ mod tests {
             .await
             .unwrap();
 
-        corral.sink().set(sink.clone());
-        tracker.sink().set(sink.clone());
+        let shutdown = Shutdown::builder()
+            .with_delay(std::time::Duration::from_millis(50))
+            .with_signal(signal)
+            .with_overwrite_fn(tokio::signal::ctrl_c)
+            .build();
+
+        let ctx = Context::builder()
+            .register(corral.clone())
+            .register(ratelimit)
+            .register(resolver)
+            .register(tracker.clone())
+            .register(tx)
+            .register(rx)
+            .build(shutdown.guard());
+        ctx.sink().set(sink);
     }
 }

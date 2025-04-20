@@ -77,6 +77,7 @@ impl OwnedWriteHalf {
 }
 
 /// A read part of the channel
+#[derive(Clone)]
 pub struct OwnedReadHalf {
     pub(crate) channel: Arc<Channel>,
 }

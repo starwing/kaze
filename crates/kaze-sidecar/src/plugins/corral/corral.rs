@@ -1,15 +1,15 @@
-use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{net::SocketAddr, sync::OnceLock};
 
-use anyhow::{Context as _, Error, Result, bail};
+use anyhow::{bail, Context as _, Error, Result};
 use lru::LruCache;
 use metrics::{counter, gauge};
 use tokio::{
     net::{
-        TcpStream,
         tcp::{OwnedReadHalf, OwnedWriteHalf},
+        TcpStream,
     },
     select,
     sync::{Mutex, Notify},
@@ -20,9 +20,9 @@ use tokio_util::codec::FramedRead;
 use tracing::{error, instrument};
 
 use kaze_plugin::{
-    PipelineCell, PipelineRequired,
     protocol::{codec::NetPacketCodec, packet::BytesPool},
-    util::{singleflight::Group, tower_ext::ServiceExt as _},
+    util::singleflight::Group,
+    ArcPlugin, Context,
 };
 
 use super::options::Options;
@@ -30,28 +30,34 @@ use super::options::Options;
 type ConnSink = Arc<Mutex<OwnedWriteHalf>>;
 
 pub struct Corral {
+    ctx: OnceLock<Context>,
     options: Options,
-    decoder: NetPacketCodec,
-    sink: PipelineCell,
+    decoder: OnceLock<NetPacketCodec>,
     group: Group<SocketAddr, ConnSink, Error>,
     sock_map: Mutex<LruCache<SocketAddr, ConnSink>>,
     join_set: Mutex<JoinSet<()>>,
     exit: Notify,
 }
 
-impl PipelineRequired for Corral {
-    fn sink(&self) -> &PipelineCell {
-        &self.sink
+impl ArcPlugin for Corral {
+    fn init(self: &Arc<Self>, ctx: Context) {
+        self.decoder
+            .set(NetPacketCodec::new(ctx.pool().clone()))
+            .unwrap();
+        self.ctx.set(ctx).unwrap();
+    }
+    fn context(self: &Arc<Self>) -> &Context {
+        self.ctx.get().unwrap()
     }
 }
 
 impl Corral {
-    pub fn new(options: Options, pool: BytesPool) -> Arc<Self> {
+    pub fn new(options: Options) -> Arc<Self> {
         let limit = options.limit;
         Arc::new(Self {
+            ctx: OnceLock::new(),
             options,
-            decoder: NetPacketCodec::new(pool),
-            sink: PipelineCell::new(),
+            decoder: OnceLock::new(),
             group: Group::new(),
             sock_map: Mutex::new(
                 limit
@@ -97,8 +103,8 @@ impl Corral {
     }
 
     /// get the bytes pool
-    pub fn bytes_pool(&self) -> &BytesPool {
-        self.decoder.pool()
+    pub fn bytes_pool(self: &Arc<Self>) -> &BytesPool {
+        self.context().pool()
     }
 
     /// remove the connection
@@ -188,7 +194,10 @@ impl ConnSource {
         corral: Arc<Corral>,
     ) -> Self {
         Self {
-            inner: FramedRead::new(read_half, corral.decoder.clone()),
+            inner: FramedRead::new(
+                read_half,
+                corral.decoder.get().unwrap().clone(),
+            ),
             addr,
             corral,
         }
@@ -215,7 +224,7 @@ impl ConnSource {
             return Ok(());
         }
         let timeout = self.corral.idle_timeout();
-        let mut sink = self.corral.sink.clone();
+        let ctx = self.corral.ctx.get().unwrap();
         while let Ok(pkg) = select! {
             pkg = tokio::time::timeout(timeout, self.inner.next()) => pkg,
             _ = self.corral.wait_exit() => return Ok(()),
@@ -224,12 +233,9 @@ impl ConnSource {
                 counter!("kaze_read_closed_total").increment(1);
                 return Ok(());
             };
-            sink.ready_call((
-                pkg.context("Failed to read packet")?,
-                Some(self.addr),
-            ))
-            .await
-            .context("Failed to transfer packet")?;
+            ctx.send((pkg.context("Failed to read packet")?, Some(self.addr)))
+                .await
+                .context("Failed to transfer packet")?;
         }
         counter!("kaze_read_idle_timeout_total").increment(1);
         Ok(())
@@ -257,13 +263,10 @@ impl ConnSource {
             counter!("kaze_read_closed_total").increment(1);
             return Ok(false);
         };
-        let mut sink = self.corral.sink.clone();
-        sink.ready_call((
-            pkg.context("Failed to read packet")?,
-            Some(self.addr),
-        ))
-        .await
-        .context("Failed to sink packet")?;
+        let ctx = self.corral.ctx.get().unwrap();
+        ctx.send((pkg.context("Failed to read packet")?, Some(self.addr)))
+            .await
+            .context("Failed to transfer packet")?;
         return Ok(true);
     }
 }

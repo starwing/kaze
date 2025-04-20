@@ -9,7 +9,6 @@ use anyhow::Context as _;
 use kaze_plugin::clap::{
     crate_version, CommandFactory, FromArgMatches, Parser,
 };
-use kaze_plugin::protocol::packet::new_bytes_pool;
 use kaze_plugin::protocol::service::{SinkMessage, ToMessageService};
 use kaze_plugin::serde::{Deserialize, Serialize};
 use kaze_plugin::service::ServiceExt;
@@ -59,7 +58,6 @@ impl Options {
     pub fn build() -> anyhow::Result<Sidecar> {
         let mut config =
             Self::new_config_map().context("failed to load config")?;
-        let pool = new_bytes_pool();
 
         let expander = |prefix: &str| -> String {
             let edge = config.get::<kaze_edge::Options>().unwrap();
@@ -92,7 +90,7 @@ impl Options {
             kaze_edge::Edge::unlink(prefix, ident).unwrap();
         }
         let edge = edge.build().unwrap();
-        let (tx, rx) = edge.into_split(&pool);
+        let (tx, rx) = edge.into_split();
 
         let resolver = Arc::new(futures::executor::block_on(async {
             config
@@ -102,10 +100,7 @@ impl Options {
                 .await
         }));
         let ratelimit = config.take::<ratelimit::Options>().unwrap().build();
-        let corral = config
-            .take::<corral::Options>()
-            .unwrap()
-            .build(pool.clone());
+        let corral = config.take::<corral::Options>().unwrap().build();
         let tracker = RpcTracker::new(10, Notify::new());
 
         let sink = ServiceBuilder::new()

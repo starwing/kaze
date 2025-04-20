@@ -8,7 +8,7 @@ use tracing::error;
 
 use kaze_plugin::{
     protocol::message::Message, service::OwnedAsyncService,
-    util::parser::DurationString,
+    util::parser::DurationString, ArcPlugin,
 };
 
 pub use options::Options;
@@ -140,6 +140,13 @@ impl OwnedAsyncService<Message> for RateLimit {
             );
             Ok(None)
         }
+    }
+}
+
+impl ArcPlugin for RateLimit {
+    fn init(self: &Arc<Self>, _ctx: kaze_plugin::Context) {}
+    fn context(self: &Arc<Self>) -> &kaze_plugin::Context {
+        unimplemented!("RateLimit does not provide context")
     }
 }
 

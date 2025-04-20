@@ -1,10 +1,12 @@
 use std::{net::SocketAddr, sync::Arc};
 
+use kaze_plugin::Plugin;
 use papaya::HashMap;
 
 use crate::Resolver;
 
 /// resolve ident to node address
+#[derive(Clone)]
 pub struct Local {
     node_map: Arc<HashMap<u32, SocketAddr>>,
 }
@@ -12,6 +14,13 @@ pub struct Local {
 impl Default for Local {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Plugin for Local {
+    fn init(&self, _context: kaze_plugin::Context) {}
+    fn context(&self) -> &kaze_plugin::Context {
+        unreachable!("Local resolver does not have a context")
     }
 }
 
