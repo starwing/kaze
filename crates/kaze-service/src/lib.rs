@@ -1,5 +1,6 @@
 mod adaptor;
 mod combiner;
+mod map;
 mod reusable_box;
 mod service_fn;
 mod util;
@@ -8,6 +9,7 @@ use std::sync::Arc;
 
 pub use adaptor::*;
 pub use combiner::*;
+pub use map::*;
 pub use service_fn::*;
 pub use util::*;
 

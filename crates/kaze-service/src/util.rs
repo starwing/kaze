@@ -1,8 +1,16 @@
 use super::*;
 
 pub trait ServiceExt<Request>: AsyncService<Request> + Sized {
+    fn map_request<F>(self, f: F) -> MapRequest<F, Self> {
+        MapRequest::new(f, self)
+    }
+
     fn map_response<F>(self, f: F) -> MapResponse<F, Self> {
         MapResponse::new(f, self)
+    }
+
+    fn map_err<F>(self, f: F) -> MapError<F, Self> {
+        MapError::new(f, self)
     }
 
     fn chain<T>(self, other: T) -> Chain<Self, T> {

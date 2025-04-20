@@ -67,36 +67,6 @@ where
 }
 
 #[derive(Clone, Copy)]
-pub struct MapResponse<F, S> {
-    f: F,
-    service: S,
-}
-
-impl<F, S> MapResponse<F, S> {
-    pub fn new(f: F, service: S) -> Self {
-        Self { f, service }
-    }
-}
-
-impl<Request, Response, F, S> AsyncService<Request> for MapResponse<F, S>
-where
-    Request: Send + 'static,
-    Response: 'static,
-    S: AsyncService<Request> + Sync,
-    F: (Fn(S::Response) -> Response) + Sync,
-{
-    type Response = Response;
-    type Error = S::Error;
-
-    async fn serve(
-        &self,
-        req: Request,
-    ) -> Result<Self::Response, Self::Error> {
-        Ok((self.f)(self.service.serve(req).await?))
-    }
-}
-
-#[derive(Clone, Copy)]
 pub struct FilterLayer<F> {
     filter: F,
 }

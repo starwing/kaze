@@ -46,8 +46,8 @@ mod tests {
             .layer(resolver.clone().into_service().into_filter())
             .layer(tracker.clone().into_filter())
             .layer(corral.clone().into_filter())
-            .layer(tx.clone().into_layer())
-            .service(SinkMessage)
+            .layer(tx.clone().into_filter())
+            .service(SinkMessage.map_response(|_| Some(())))
             .map_response(|_| ());
         let mut sink: PipelineService =
             BoxCloneSyncService::new(sink.into_tower());

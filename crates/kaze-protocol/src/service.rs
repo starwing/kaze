@@ -25,27 +25,12 @@ impl AsyncService<PacketWithAddr> for ToMessageService {
 pub struct SinkMessage;
 
 impl AsyncService<Message> for SinkMessage {
-    type Response = Option<Message>;
+    type Response = ();
     type Error = anyhow::Error;
 
     async fn serve(&self, req: Message) -> anyhow::Result<Self::Response> {
         info!("message dropped: {:?}", req);
-        Ok(None)
-    }
-}
-
-impl AsyncService<Option<Message>> for SinkMessage {
-    type Response = Option<Message>;
-    type Error = anyhow::Error;
-
-    async fn serve(
-        &self,
-        req: Option<Message>,
-    ) -> anyhow::Result<Self::Response> {
-        if let Some(msg) = req {
-            info!("message dropped: {:?}", msg);
-        }
-        Ok(None)
+        Ok(())
     }
 }
 
@@ -81,7 +66,5 @@ mod tests {
                 .await
                 .is_ok()
         );
-
-        assert!(SinkMessage.serve(None).await.is_ok());
     }
 }

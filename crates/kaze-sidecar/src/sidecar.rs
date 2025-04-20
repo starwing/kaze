@@ -115,7 +115,7 @@ impl Options {
             .layer(tracker.clone().into_filter())
             .layer(corral.clone().into_filter())
             .layer(tx.into_filter())
-            .service(SinkMessage)
+            .service(SinkMessage.map_response(|_| Some(())))
             .map_response(|_| ());
         let sink: PipelineService =
             BoxCloneSyncService::new(sink.into_tower());
