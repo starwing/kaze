@@ -1,6 +1,7 @@
 mod clap_default;
 mod context;
 mod local;
+mod wrapper;
 
 use std::{any::Any, sync::Arc};
 
@@ -21,6 +22,7 @@ pub use kaze_util as util;
 pub use clap_default::ClapDefault;
 pub use context::*;
 pub use local::*;
+pub use wrapper::*;
 
 pub type PipelineService =
     BoxCloneSyncService<PacketWithAddr, (), anyhow::Error>;

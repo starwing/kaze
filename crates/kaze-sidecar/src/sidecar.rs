@@ -3,6 +3,7 @@ use std::sync::{Arc, LazyLock};
 
 use crate::config::{ConfigBuilder, ConfigFileBuilder, ConfigMap};
 use crate::plugins::corral::Corral;
+use crate::plugins::log::LogService;
 use crate::plugins::tracker::RpcTracker;
 use crate::plugins::{consul, corral, log, prometheus, ratelimit};
 use anyhow::Context as _;
@@ -12,8 +13,9 @@ use kaze_plugin::clap::{
 use kaze_plugin::protocol::service::{SinkMessage, ToMessageService};
 use kaze_plugin::serde::{Deserialize, Serialize};
 use kaze_plugin::service::ServiceExt;
+use kaze_plugin::tokio_graceful::Shutdown;
 use kaze_plugin::util::tower_ext::ServiceExt as _;
-use kaze_plugin::PipelineService;
+use kaze_plugin::{Context, PipelineService};
 use kaze_resolver::ResolverExt;
 use scopeguard::defer;
 use tokio::join;
@@ -92,34 +94,47 @@ impl Options {
         let edge = edge.build().unwrap();
         let (tx, rx) = edge.into_split();
 
-        let resolver = Arc::new(futures::executor::block_on(async {
+        let resolver = futures::executor::block_on(async {
             config
                 .take::<kaze_resolver::LocalOptions>()
                 .unwrap()
                 .build()
                 .await
-        }));
+        });
         let ratelimit = config.take::<ratelimit::Options>().unwrap().build();
         let corral = config.take::<corral::Options>().unwrap().build();
         let tracker = RpcTracker::new(10, Notify::new());
+        let logger = LogService;
 
         let sink = ServiceBuilder::new()
             .layer(ToMessageService.into_layer())
-            .layer(ratelimit.into_filter())
+            .layer(logger.into_filter())
+            .layer(ratelimit.clone().into_filter())
             .layer(resolver.clone().into_service().into_filter())
             .layer(tracker.clone().into_filter())
             .layer(corral.clone().into_filter())
-            .layer(tx.into_filter())
+            .layer(tx.clone().into_filter())
             .service(SinkMessage.map_response(|_| Some(())))
             .map_response(|_| ());
         let sink: PipelineService =
             BoxCloneSyncService::new(sink.into_tower());
+        let shutdown = Shutdown::default();
+
+        let ctx = Context::builder()
+            .register(corral.clone())
+            .register(ratelimit)
+            .register(resolver)
+            .register(tracker.clone())
+            .register(tx)
+            .register(rx.clone())
+            .build(shutdown.guard());
+        ctx.sink().set(sink);
 
         let options = config.take::<Options>().unwrap();
         Ok(Sidecar {
+            ctx,
             rx: Some(rx),
             corral,
-            sink,
             options,
             _guard,
         })
@@ -156,9 +171,9 @@ impl Options {
 }
 
 pub struct Sidecar {
+    ctx: Context,
     rx: Option<kaze_edge::Receiver>,
     corral: Arc<Corral>,
-    sink: PipelineService,
     options: Options,
     _guard: Option<WorkerGuard>,
 }
@@ -182,7 +197,7 @@ impl Sidecar {
         &self,
         mut rx: kaze_edge::Receiver,
     ) -> anyhow::Result<()> {
-        let mut sink = self.sink.clone();
+        let mut sink = self.ctx.sink().clone();
         loop {
             let packet =
                 rx.read_packet().await.context("failed to read packet")?;

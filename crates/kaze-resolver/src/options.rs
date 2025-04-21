@@ -1,15 +1,17 @@
 use std::{
     net::{Ipv4Addr, SocketAddr},
+    sync::Arc,
     time::Duration,
 };
 
 use kaze_plugin::{
+    Plugin,
     clap::Args,
     serde::{Deserialize, Serialize},
     util::parser::DurationString,
 };
 
-use crate::{Resolver, cached::Cached, local::Local};
+use crate::{Resolver, ResolverNoPlugin, cached::Cached, local::Local};
 
 /// local resolver configurations
 #[derive(Args, Serialize, Deserialize, Clone, Debug)]
@@ -33,13 +35,13 @@ pub struct Options {
 }
 
 impl Options {
-    pub async fn build(self) -> impl Resolver {
+    pub async fn build(self) -> impl Resolver + Plugin + Clone {
         let resolver =
             Cached::new(Local::new(), self.cache_size, self.live_time);
         for node in self.nodes {
             resolver.add_node(node.ident.to_bits(), node.addr).await;
         }
-        resolver
+        ResolverNoPlugin::new(Arc::new(resolver))
     }
 }
 
