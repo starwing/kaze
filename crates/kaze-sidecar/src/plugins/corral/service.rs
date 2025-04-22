@@ -1,8 +1,8 @@
-use std::{io::IoSlice, sync::Arc};
+use std::io::IoSlice;
 
 use anyhow::Context as _;
 use futures::future::join_all;
-use kaze_plugin::service::OwnedAsyncService;
+use kaze_plugin::service::AsyncService;
 use tokio::io::AsyncWriteExt;
 use tracing::error;
 
@@ -12,14 +12,11 @@ use kaze_plugin::protocol::message::{
 
 use super::Corral;
 
-impl OwnedAsyncService<Message> for Corral {
+impl AsyncService<Message> for Corral {
     type Response = Option<Message>;
     type Error = anyhow::Error;
 
-    async fn serve(
-        self: Arc<Self>,
-        msg: Message,
-    ) -> anyhow::Result<Self::Response> {
+    async fn serve(&self, msg: Message) -> anyhow::Result<Self::Response> {
         if !msg.destination().is_remote() {
             return Ok(Some(msg));
         }
@@ -36,7 +33,7 @@ impl OwnedAsyncService<Message> for Corral {
 }
 
 async fn corral_send(
-    corral: &Arc<Corral>,
+    corral: &Corral,
     item: PacketWithAddr,
     dst: Node,
 ) -> Result<(), anyhow::Error> {
@@ -51,7 +48,7 @@ async fn corral_send(
 }
 
 async fn corral_broadcast(
-    corral: &Arc<Corral>,
+    corral: &Corral,
     item: PacketWithAddr,
     dst_list: Vec<Node>,
 ) -> Result<(), anyhow::Error> {
@@ -77,7 +74,7 @@ async fn corral_broadcast(
 }
 
 async fn corral_send_raw(
-    corral: &Arc<Corral>,
+    corral: &Corral,
     iovec: &[IoSlice<'_>],
     dst: Node,
 ) -> Result<(), anyhow::Error> {

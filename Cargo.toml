@@ -37,8 +37,7 @@ rand = "0.9.1"
 scopeguard = "1.2.0"
 serde = { version = "1.0.219", features = ["derive"] }
 thingbuf = "0.1.6"
-tokio = "1.44.2"
-tokio-shutdown = { version = "0.1.5", features = ["tracing"] }
+tokio = { version = "1.44.2", features = ["parking_lot"] }
 tokio-graceful = "0.2.2"
 tokio-stream = "0.1.17"
 tokio-util = { version = "0.7.14", features = ["codec"] }

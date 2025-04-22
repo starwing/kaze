@@ -1,15 +1,18 @@
 use std::path::PathBuf;
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 
-use crate::config::{ConfigBuilder, ConfigFileBuilder, ConfigMap};
-use crate::plugins::corral::Corral;
-use crate::plugins::log::LogService;
-use crate::plugins::tracker::RpcTracker;
-use crate::plugins::{consul, corral, log, prometheus, ratelimit};
 use anyhow::Context as _;
 use kaze_plugin::clap::{
     crate_version, CommandFactory, FromArgMatches, Parser,
 };
+use tokio::join;
+use tower::util::BoxCloneSyncService;
+use tower::ServiceBuilder;
+use tracing::level_filters::LevelFilter;
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::{fmt, EnvFilter};
+
 use kaze_plugin::protocol::service::{SinkMessage, ToMessageService};
 use kaze_plugin::serde::{Deserialize, Serialize};
 use kaze_plugin::service::ServiceExt;
@@ -17,16 +20,12 @@ use kaze_plugin::tokio_graceful::Shutdown;
 use kaze_plugin::util::tower_ext::ServiceExt as _;
 use kaze_plugin::{Context, PipelineService};
 use kaze_resolver::ResolverExt;
-use scopeguard::defer;
-use tokio::join;
-use tokio::net::TcpListener;
-use tokio::sync::Notify;
-use tower::util::BoxCloneSyncService;
-use tower::ServiceBuilder;
-use tracing::level_filters::LevelFilter;
-use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::prelude::*;
-use tracing_subscriber::{fmt, EnvFilter};
+
+use crate::config::{ConfigBuilder, ConfigFileBuilder, ConfigMap};
+use crate::plugins::corral::Corral;
+use crate::plugins::log::LogService;
+use crate::plugins::tracker::RpcTracker;
+use crate::plugins::{consul, corral, log, prometheus, ratelimit};
 
 /// the kaze sidecar for host
 #[derive(Parser, Serialize, Deserialize, Clone, Debug)]
@@ -43,12 +42,6 @@ pub struct Options {
     #[arg(trailing_var_arg = true)]
     #[serde(skip)]
     pub host_cmd: Vec<String>,
-
-    /// listen address for the mesh endpoint
-    #[serde(default = "default_listen")]
-    #[arg(short, long, default_value_t = default_listen())]
-    #[arg(value_name = "ADDR")]
-    pub listen: String,
 
     /// Count of worker threads (0 means autodetect)
     #[arg(short = 'j', long)]
@@ -86,12 +79,12 @@ impl Options {
             )
             .init();
 
-        let edge: Box<kaze_edge::Options> = config.take().unwrap();
-        let (prefix, ident) = (edge.name.clone(), edge.ident);
-        defer! {
-            kaze_edge::Edge::unlink(prefix, ident).unwrap();
-        }
-        let edge = edge.build().unwrap();
+        let edge = config
+            .take::<kaze_edge::Options>()
+            .unwrap()
+            .build()
+            .unwrap();
+        let _unlink_guard = edge.unlink_guard();
         let (tx, rx) = edge.into_split();
 
         let resolver = futures::executor::block_on(async {
@@ -103,7 +96,7 @@ impl Options {
         });
         let ratelimit = config.take::<ratelimit::Options>().unwrap().build();
         let corral = config.take::<corral::Options>().unwrap().build();
-        let tracker = RpcTracker::new(10, Notify::new());
+        let tracker = RpcTracker::new(10);
         let logger = LogService;
 
         let sink = ServiceBuilder::new()
@@ -133,9 +126,8 @@ impl Options {
         let options = config.take::<Options>().unwrap();
         Ok(Sidecar {
             ctx,
-            rx: Some(rx),
-            corral,
             options,
+            _unlink_guard,
             _guard,
         })
     }
@@ -172,9 +164,8 @@ impl Options {
 
 pub struct Sidecar {
     ctx: Context,
-    rx: Option<kaze_edge::Receiver>,
-    corral: Arc<Corral>,
     options: Options,
+    _unlink_guard: kaze_edge::UnlinkGuard,
     _guard: Option<WorkerGuard>,
 }
 
@@ -185,37 +176,25 @@ impl Sidecar {
     }
 
     /// run the sidecar
-    pub async fn run(mut self) -> anyhow::Result<()> {
-        let rx = self.rx.take().unwrap();
-        let (r1, r2) = join!(self.handle_receiver(rx), self.handle_listener());
+    pub async fn run(self) -> anyhow::Result<()> {
+        let (r1, r2) = join!(
+            self.handle_receiver(),
+            self.ctx.get::<Corral>().unwrap().handle_listener()
+        );
         r1?;
         r2?;
         Ok(())
     }
 
-    async fn handle_receiver(
-        &self,
-        mut rx: kaze_edge::Receiver,
-    ) -> anyhow::Result<()> {
+    async fn handle_receiver(&self) -> anyhow::Result<()> {
         let mut sink = self.ctx.sink().clone();
+        let mut rx = self.ctx.get::<kaze_edge::Receiver>().unwrap().clone();
         loop {
             let packet =
                 rx.read_packet().await.context("failed to read packet")?;
             sink.ready_call((packet, None)).await?;
         }
     }
-
-    async fn handle_listener(&self) -> anyhow::Result<()> {
-        let listener = TcpListener::bind(&self.options.listen).await?;
-        while let Ok((conn, addr)) = listener.accept().await {
-            self.corral.add_connection(conn, addr).await?;
-        }
-        Ok(())
-    }
-}
-
-fn default_listen() -> String {
-    "0.0.0.0:6081".to_string()
 }
 
 static VERSION: LazyLock<String> = LazyLock::new(|| {

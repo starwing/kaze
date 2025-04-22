@@ -10,7 +10,6 @@ papaya.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
 tokio-graceful.workspace = true
-tokio-shutdown.workspace = true
 tokio.workspace = true
 tower.workspace = true
 #

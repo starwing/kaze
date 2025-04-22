@@ -4,17 +4,16 @@ use std::time::Duration;
 
 use anyhow::Result;
 use futures::StreamExt;
-use kaze_plugin::service::OwnedAsyncService;
-use kaze_plugin::{ArcPlugin, Context};
 use metrics::counter;
 use papaya::HashMap;
 use thingbuf::mpsc::{Receiver, Sender};
 use thingbuf::Recycle;
-use tokio::{select, sync::Notify};
+use tokio::select;
 use tokio_util::time::delay_queue::Expired;
 use tokio_util::time::{delay_queue::Key, DelayQueue};
 use tracing::error;
 
+use kaze_plugin::service::OwnedAsyncService;
 use kaze_plugin::{
     local_node,
     protocol::{
@@ -26,6 +25,7 @@ use kaze_plugin::{
         },
     },
 };
+use kaze_plugin::{ArcPlugin, Context};
 
 /// RpcTracker is a service that tracks rpc info.
 ///
@@ -37,6 +37,7 @@ pub struct RpcTracker {
     ctx: OnceLock<Context>,
 }
 
+#[derive(Debug)]
 enum Action {
     None,
     Insert(Hdr),
@@ -65,7 +66,7 @@ impl ArcPlugin for RpcTracker {
 }
 
 impl RpcTracker {
-    pub fn new(capacity: usize, notify: Notify) -> Arc<Self> {
+    pub fn new(capacity: usize) -> Arc<Self> {
         let (tx, rx) = thingbuf::mpsc::with_recycle(capacity, ActionRecycler);
         let obj = Arc::new(Self {
             ctx: OnceLock::new(),
@@ -73,21 +74,25 @@ impl RpcTracker {
             seq: AtomicU32::new(114514),
             tx,
         });
-        tokio::spawn(obj.clone().run(rx, notify));
+        tokio::spawn(obj.clone().run(rx));
         obj
     }
 
-    async fn run(
-        self: Arc<Self>,
-        rx: Receiver<Action, ActionRecycler>,
-        notify: Notify,
-    ) {
+    async fn run(self: Arc<Self>, rx: Receiver<Action, ActionRecycler>) {
         let mut queue = DelayQueue::new();
         loop {
-            let action = select! {
-                insert = rx.recv() => insert,
-                expired = queue.next() => expired.map(|e| Action::Expired(e)),
-                _ = notify.notified() => break,
+            let action = if queue.is_empty() {
+                select! {
+                    insert = rx.recv() => insert,
+                    _ = self.context().exiting() => break,
+                }
+            } else {
+                select! {
+                    insert = rx.recv() => insert,
+                    expired = queue.next() =>
+                        expired.map(|e| Action::Expired(e)),
+                    _ = self.context().exiting() => break,
+                }
             };
             match action {
                 None => break,
@@ -200,12 +205,14 @@ struct Info {
 mod tests {
     use super::*;
 
+    use tokio::sync::Notify;
     use tower::util::BoxCloneSyncService;
 
     use hdr::RpcType;
     use kaze_plugin::{
         protocol::message::{Destination, PacketWithAddr, Source},
         service::{async_service_fn, ServiceExt},
+        tokio_graceful::Shutdown,
     };
 
     #[tokio::test]
@@ -219,13 +226,15 @@ mod tests {
                 println!("message: {:?}", packet);
                 assert_eq!(packet.hdr().ret_code, RetCode::RetTimeout as u32);
                 ntf_clone.notify_one();
-                Ok::<_, anyhow::Error>(())
+                Ok(())
             }
         })
         .into_tower();
         let sink = BoxCloneSyncService::new(sink);
-        let tracker = RpcTracker::new(10, Notify::new());
-        let ctx = Context::builder().register(tracker.clone()).build_mock();
+        let tracker = RpcTracker::new(10);
+        let ctx = Context::builder()
+            .register(tracker.clone())
+            .build(Shutdown::default().guard());
         ctx.raw_sink().set(sink);
         let msg = Message::new_with_destination(
             Packet::from_hdr(Hdr {
@@ -237,7 +246,7 @@ mod tests {
             Source::from_local(),
             Destination::to_local(),
         );
-        let res = tracker.record(msg).await;
+        let res = tracker.serve(msg).await;
         assert!(res.is_ok());
         notify.notified().await;
     }

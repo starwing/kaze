@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use tokio_graceful::{Shutdown, ShutdownGuard};
+use tokio_graceful::ShutdownGuard;
 
 use kaze_protocol::{
     message::PacketWithAddr,
@@ -34,14 +34,6 @@ impl ContextBuilder {
             component.init(ctx.clone());
         }
         ctx
-    }
-
-    pub fn build_mock(self) -> Context {
-        let shutdown = Shutdown::builder()
-            .with_delay(std::time::Duration::from_millis(50))
-            .with_signal(tokio::signal::ctrl_c())
-            .build();
-        self.build(shutdown.guard())
     }
 }
 
@@ -95,6 +87,12 @@ impl Context {
         &self.inner.pool
     }
 
+    /// Get a reference to the shutdown guard,
+    /// if and only if the executor was created with [`Self::graceful`].
+    pub fn guard(&self) -> &ShutdownGuard {
+        &self.inner.guard
+    }
+
     /// Returns true if the `Extensions` contains the given type.
     pub fn contains<T: Send + Sync + 'static>(&self) -> bool {
         self.inner.components.contains_key(&TypeId::of::<T>())
@@ -116,6 +114,10 @@ impl Context {
                 .get_mut(&TypeId::of::<T>())
                 .and_then(|boxed| (**boxed).as_any_mut().downcast_mut())
         })
+    }
+
+    pub async fn exiting(&self) {
+        self.inner.guard.cancelled().await
     }
 
     /// Spawn a future on the current executor,
@@ -141,12 +143,6 @@ impl Context {
         T::Output: Send + 'static,
     {
         self.guard().spawn_task_fn(future)
-    }
-
-    /// Get a reference to the shutdown guard,
-    /// if and only if the executor was created with [`Self::graceful`].
-    pub fn guard(&self) -> &ShutdownGuard {
-        &self.inner.guard
     }
 
     /// Send message to the pipeline
@@ -195,6 +191,8 @@ mod tests {
     use std::pin::Pin;
     use std::task::{Context as TaskContext, Poll};
 
+    use tokio_graceful::Shutdown;
+
     use crate::{Context, Plugin};
 
     #[derive(Clone)]
@@ -235,14 +233,14 @@ mod tests {
             .register(TestComponent {
                 value: "test".to_string(),
             })
-            .build_mock();
+            .build(Shutdown::default().guard());
         let retrieved = context.get::<TestComponent>().unwrap();
         assert_eq!(retrieved.value, "test");
     }
 
     #[tokio::test]
     async fn test_get_nonexistent_component() {
-        let context = Context::builder().build_mock();
+        let context = Context::builder().build(Shutdown::default().guard());
 
         let retrieved = context.get::<TestComponent>();
         assert!(retrieved.is_none());
@@ -250,7 +248,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_task() {
-        let context = Context::builder().build_mock();
+        let context = Context::builder().build(Shutdown::default().guard());
 
         let handle = context.spawn_task(async { 42 });
 
@@ -259,14 +257,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_task_fn() {
-        let context = Context::builder().build_mock();
+        let context = Context::builder().build(Shutdown::default().guard());
         let handle = context.spawn_task_fn(|_guard| async { 42 });
         assert_eq!(handle.await.unwrap(), 42);
     }
 
     #[tokio::test]
     async fn test_guard_reference() {
-        let context = Context::builder().build_mock();
+        let context = Context::builder().build(Shutdown::default().guard());
 
         let handle = context.guard().spawn_task_fn(|_guard| async { 42 });
         assert_eq!(handle.await.unwrap(), 42);

@@ -6,13 +6,14 @@ use std::{net::SocketAddr, sync::OnceLock};
 use anyhow::{bail, Context as _, Error, Result};
 use lru::LruCache;
 use metrics::{counter, gauge};
+use tokio::net::TcpListener;
 use tokio::{
     net::{
         tcp::{OwnedReadHalf, OwnedWriteHalf},
         TcpStream,
     },
     select,
-    sync::{Mutex, Notify},
+    sync::Mutex,
     task::JoinSet,
 };
 use tokio_stream::StreamExt;
@@ -22,68 +23,77 @@ use tracing::{error, instrument};
 use kaze_plugin::{
     protocol::{codec::NetPacketCodec, packet::BytesPool},
     util::singleflight::Group,
-    ArcPlugin, Context,
+    Context, Plugin,
 };
 
 use super::options::Options;
 
 type ConnSink = Arc<Mutex<OwnedWriteHalf>>;
 
+#[derive(Clone)]
 pub struct Corral {
+    inner: Arc<Inner>,
+}
+
+struct Inner {
     ctx: OnceLock<Context>,
     options: Options,
     decoder: OnceLock<NetPacketCodec>,
     group: Group<SocketAddr, ConnSink, Error>,
     sock_map: Mutex<LruCache<SocketAddr, ConnSink>>,
     join_set: Mutex<JoinSet<()>>,
-    exit: Notify,
 }
 
-impl ArcPlugin for Corral {
-    fn init(self: &Arc<Self>, ctx: Context) {
-        self.decoder
+impl Plugin for Corral {
+    fn init(&self, ctx: Context) {
+        self.inner
+            .decoder
             .set(NetPacketCodec::new(ctx.pool().clone()))
             .unwrap();
-        self.ctx.set(ctx).unwrap();
+        self.inner.ctx.set(ctx).unwrap();
     }
-    fn context(self: &Arc<Self>) -> &Context {
-        self.ctx.get().unwrap()
+    fn context(&self) -> &Context {
+        self.inner.ctx.get().unwrap()
     }
 }
 
 impl Corral {
-    pub fn new(options: Options) -> Arc<Self> {
+    pub fn new(options: Options) -> Self {
         let limit = options.limit;
-        Arc::new(Self {
-            ctx: OnceLock::new(),
-            options,
-            decoder: OnceLock::new(),
-            group: Group::new(),
-            sock_map: Mutex::new(
-                limit
-                    .and_then(NonZeroUsize::new)
-                    .map(|l| LruCache::new(l))
-                    .unwrap_or(LruCache::unbounded()),
-            ),
-            join_set: Mutex::new(JoinSet::new()),
-            exit: Notify::new(),
-        })
+        Self {
+            inner: Arc::new(Inner {
+                ctx: OnceLock::new(),
+                options,
+                decoder: OnceLock::new(),
+                group: Group::new(),
+                sock_map: Mutex::new(
+                    limit
+                        .and_then(NonZeroUsize::new)
+                        .map(|l| LruCache::new(l))
+                        .unwrap_or(LruCache::unbounded()),
+                ),
+                join_set: Mutex::new(JoinSet::new()),
+            }),
+        }
     }
 
-    /// notify all tasks to exit
-    pub fn notify_exit(&self) {
-        self.exit.notify_waiters();
-    }
-
-    /// wait for all tasks to exit
-    pub async fn wait_exit(&self) {
-        self.exit.notified().await;
+    pub async fn handle_listener(&self) -> anyhow::Result<()> {
+        let listener = TcpListener::bind(&self.inner.options.listen).await?;
+        loop {
+            let (conn, addr) = select! {
+                r = listener.accept() => r?,
+                _ = self.context().exiting() => break,
+            };
+            self.add_connection(conn, addr).await?;
+        }
+        self.graceful_exit().await?;
+        Ok(())
     }
 
     /// gracefully exit
-    pub async fn graceful_exit(self: Arc<Self>) -> Result<()> {
+    async fn graceful_exit(&self) -> Result<()> {
         // wait for all tasks to finish
-        let mut join_set = self.join_set.lock().await;
+        let mut join_set = self.inner.join_set.lock().await;
         while let Some(res) = join_set.join_next().await {
             if let Err(e) = res {
                 error!(error = %e, "Failed to join connection handling task");
@@ -94,35 +104,35 @@ impl Corral {
 
     /// get the connection idle timeout
     pub fn idle_timeout(&self) -> Duration {
-        self.options.idle_timeout.into()
+        self.inner.options.idle_timeout.into()
     }
 
     /// get the connection pending timeout
     pub fn pending_timeout(&self) -> Duration {
-        self.options.pending_timeout.into()
+        self.inner.options.pending_timeout.into()
     }
 
     /// get the bytes pool
-    pub fn bytes_pool(self: &Arc<Self>) -> &BytesPool {
+    pub fn bytes_pool(&self) -> &BytesPool {
         self.context().pool()
     }
 
     /// remove the connection
-    async fn remove_connection(self: Arc<Self>, addr: SocketAddr) {
-        self.clone().sock_map.lock().await.pop(&addr);
+    async fn remove_connection(&self, addr: SocketAddr) {
+        self.clone().inner.sock_map.lock().await.pop(&addr);
         gauge!("kaze_connections_total").decrement(1);
     }
 }
 
 impl Corral {
     pub async fn find_or_connect(
-        self: &Arc<Self>,
+        &self,
         addr: SocketAddr,
     ) -> Result<Option<ConnSink>> {
-        if let Some(sock) = self.sock_map.lock().await.get(&addr) {
+        if let Some(sock) = self.inner.sock_map.lock().await.get(&addr) {
             return Ok(Some(sock.clone()));
         }
-        match self.group.work(addr, self.connect(addr)).await {
+        match self.inner.group.work(addr, self.connect(addr)).await {
             Ok(Ok(conn)) => Ok(Some(conn)),
             Err(Some(conn)) => Ok(Some(conn)),
             Err(None) => Ok(None),
@@ -133,7 +143,7 @@ impl Corral {
     }
 
     pub async fn add_connection(
-        self: &Arc<Self>,
+        &self,
         conn: TcpStream,
         addr: SocketAddr,
     ) -> Result<ConnSink> {
@@ -146,7 +156,7 @@ impl Corral {
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn connect(self: &Arc<Self>, addr: SocketAddr) -> Result<ConnSink> {
+    async fn connect(&self, addr: SocketAddr) -> Result<ConnSink> {
         let sock = tokio::net::TcpStream::connect(addr)
             .await
             .context("Failed to connect")?;
@@ -154,7 +164,7 @@ impl Corral {
     }
 
     async fn add_connection_with_pending(
-        self: &Arc<Self>,
+        &self,
         conn: TcpStream,
         addr: SocketAddr,
         pending: Option<Duration>,
@@ -162,11 +172,11 @@ impl Corral {
         let (read_half, write_half) = conn.into_split();
         let conn = ConnSource::new(read_half, addr, self.clone());
         let fut = conn.main_loop(pending);
-        self.join_set.lock().await.spawn(fut);
+        self.inner.join_set.lock().await.spawn(fut);
         gauge!("kaze_connections_total").increment(1);
 
         let conn = Arc::new(Mutex::new(write_half));
-        self.sock_map.lock().await.put(addr, conn.clone());
+        self.inner.sock_map.lock().await.put(addr, conn.clone());
         Ok(conn)
     }
 }
@@ -174,7 +184,7 @@ impl Corral {
 pub struct ConnSource {
     inner: FramedRead<OwnedReadHalf, NetPacketCodec>,
     addr: SocketAddr,
-    corral: Arc<Corral>,
+    corral: Corral,
 }
 
 impl Drop for ConnSource {
@@ -191,12 +201,12 @@ impl ConnSource {
     fn new(
         read_half: OwnedReadHalf,
         addr: SocketAddr,
-        corral: Arc<Corral>,
+        corral: Corral,
     ) -> Self {
         Self {
             inner: FramedRead::new(
                 read_half,
-                corral.decoder.get().unwrap().clone(),
+                corral.inner.decoder.get().unwrap().clone(),
             ),
             addr,
             corral,
@@ -223,11 +233,11 @@ impl ConnSource {
         {
             return Ok(());
         }
+        let ctx = self.corral.context();
         let timeout = self.corral.idle_timeout();
-        let ctx = self.corral.ctx.get().unwrap();
         while let Ok(pkg) = select! {
             pkg = tokio::time::timeout(timeout, self.inner.next()) => pkg,
-            _ = self.corral.wait_exit() => return Ok(()),
+            _ = ctx.exiting() => return Ok(()),
         } {
             let Some(pkg) = pkg else {
                 counter!("kaze_read_closed_total").increment(1);
@@ -251,7 +261,7 @@ impl ConnSource {
         };
         let pkg = select! {
             pkg = tokio::time::timeout(pending, self.inner.next()) => pkg,
-            _ = self.corral.wait_exit() => return Ok(false)
+            _ = self.corral.context().exiting() => return Ok(false)
         };
         if let Err(_) = pkg {
             // timeout
@@ -263,10 +273,142 @@ impl ConnSource {
             counter!("kaze_read_closed_total").increment(1);
             return Ok(false);
         };
-        let ctx = self.corral.ctx.get().unwrap();
-        ctx.send((pkg.context("Failed to read packet")?, Some(self.addr)))
+        self.corral
+            .context()
+            .send((pkg.context("Failed to read packet")?, Some(self.addr)))
             .await
             .context("Failed to transfer packet")?;
         return Ok(true);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kaze_plugin::tokio_graceful::Shutdown;
+    use std::net::SocketAddr;
+    use std::str::FromStr;
+    use tokio::net::TcpStream;
+    use tokio::time::timeout;
+
+    fn create_test_corral() -> Corral {
+        let corral = Options {
+            listen: "127.0.0.1:0".into(),
+            idle_timeout: Duration::from_secs(1).into(),
+            pending_timeout: Duration::from_secs(1).into(),
+            limit: Some(100),
+        }
+        .build();
+        Context::builder()
+            .register(corral.clone())
+            .build(Shutdown::default().guard());
+        corral
+    }
+
+    #[tokio::test]
+    async fn test_find_or_connect_nonexistent() {
+        let corral = create_test_corral();
+
+        // Attempt to connect to a non-listening port
+        let addr = SocketAddr::from_str("127.0.0.1:1").unwrap();
+        let result = corral.find_or_connect(addr).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_connection_cache() {
+        let corral = create_test_corral();
+
+        // Create a server that we can connect to
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = listener.local_addr().unwrap();
+
+        // Connect to the server
+        let conn1 = TcpStream::connect(server_addr).await.unwrap();
+        let _conn_sink = corral
+            .clone()
+            .add_connection(conn1, server_addr)
+            .await
+            .unwrap();
+
+        // Verify the connection is in the cache
+        let cached_conn = corral.find_or_connect(server_addr).await.unwrap();
+        assert!(cached_conn.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_connection_limit() {
+        let corral = Options {
+            listen: "127.0.0.1:0".into(),
+            idle_timeout: Duration::from_secs(1).into(),
+            pending_timeout: Duration::from_secs(1).into(),
+            limit: Some(2), // Set a very small limit
+        }
+        .build();
+
+        // Mock context initialization
+        Context::builder()
+            .register(corral.clone())
+            .build(Shutdown::default().guard());
+
+        // Create a server
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = listener.local_addr().unwrap();
+
+        // Add three connections - should evict the first one due to LRU
+        let conn1 = TcpStream::connect(server_addr).await.unwrap();
+        let addr1 = SocketAddr::from_str("127.0.0.1:10001").unwrap();
+        corral
+            .add_connection_with_pending(conn1, addr1, None)
+            .await
+            .unwrap();
+
+        let conn2 = TcpStream::connect(server_addr).await.unwrap();
+        let addr2 = SocketAddr::from_str("127.0.0.1:10002").unwrap();
+        corral
+            .add_connection_with_pending(conn2, addr2, None)
+            .await
+            .unwrap();
+
+        let conn3 = TcpStream::connect(server_addr).await.unwrap();
+        let addr3 = SocketAddr::from_str("127.0.0.1:10003").unwrap();
+        corral
+            .add_connection_with_pending(conn3, addr3, None)
+            .await
+            .unwrap();
+
+        // Check that addr1 was evicted
+        let mut cache = corral.inner.sock_map.lock().await;
+        assert!(cache.get(&addr2).is_some());
+        assert!(cache.get(&addr3).is_some());
+        assert!(cache.get(&addr1).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_pending_timeout() {
+        let corral = create_test_corral();
+
+        // Create a server
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = listener.local_addr().unwrap();
+
+        // Connect to the server with a very short pending timeout
+        let conn = TcpStream::connect(server_addr).await.unwrap();
+        let pending_timeout = Duration::from_millis(10);
+
+        // This should time out because no data is received
+        let result = timeout(
+            Duration::from_millis(100),
+            corral.add_connection_with_pending(
+                conn,
+                server_addr,
+                Some(pending_timeout),
+            ),
+        )
+        .await
+        .unwrap();
+
+        // The connection should still be added
+        assert!(result.is_ok());
     }
 }

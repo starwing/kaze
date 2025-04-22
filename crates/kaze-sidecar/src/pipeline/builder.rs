@@ -6,7 +6,6 @@ mod tests {
     };
     use kaze_resolver::ResolverExt;
     use scopeguard::defer;
-    use tokio::sync::Notify;
     use tower::{util::BoxCloneSyncService, ServiceBuilder};
 
     use crate::plugins::{corral, ratelimit, tracker::RpcTracker};
@@ -38,7 +37,7 @@ mod tests {
         let resolver = kaze_resolver::local::Local::new();
         let ratelimit = ratelimit::Options::default().build();
         let corral = corral::Options::default().build();
-        let tracker = RpcTracker::new(10, Notify::new());
+        let tracker = RpcTracker::new(10);
 
         let sink = ServiceBuilder::new()
             .layer(ToMessageService.into_layer())

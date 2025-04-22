@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use kaze_plugin::{
@@ -15,6 +14,12 @@ use super::corral::Corral;
 #[command(next_help_heading = "Corral configurations")]
 #[group(id = "CorralOptions")]
 pub struct Options {
+    /// listen address for the mesh endpoint
+    #[serde(default = "default_listen")]
+    #[arg(short, long, default_value_t = default_listen())]
+    #[arg(value_name = "ADDR")]
+    pub listen: String,
+
     /// limit count for connections
     #[arg(long = "corral-limit")]
     #[arg(value_name = "COUNT")]
@@ -34,9 +39,13 @@ pub struct Options {
 }
 
 impl Options {
-    pub fn build(self) -> Arc<Corral> {
+    pub fn build(self) -> Corral {
         Corral::new(self)
     }
+}
+
+fn default_listen() -> String {
+    "0.0.0.0:6081".to_string()
 }
 
 fn default_pending_timeout() -> DurationString {

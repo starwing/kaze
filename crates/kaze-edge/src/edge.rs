@@ -16,6 +16,8 @@ use kaze_core::{Channel, OwnedReadHalf, OwnedWriteHalf};
 use kaze_plugin::protocol::{bytes::Buf, message::Message};
 
 pub use kaze_core::Error;
+pub use kaze_core::ShutdownGuard;
+pub use kaze_core::UnlinkGuard;
 
 pub struct Edge {
     channel: Channel,
@@ -238,7 +240,7 @@ impl Plugin for Sender {
 
 #[cfg(test)]
 mod tests {
-    use kaze_plugin::service::AsyncService;
+    use kaze_plugin::{service::AsyncService, tokio_graceful::Shutdown};
     use kaze_protocol::{
         message::{Destination, Message, Source},
         packet::Packet,
@@ -254,7 +256,7 @@ mod tests {
         let (tx, _rx) = edge.into_split();
         kaze_plugin::Context::builder()
             .register(tx.clone())
-            .build_mock();
+            .build(Shutdown::default().guard());
         let r = tx
             .serve(Message::new_with_destination(
                 Packet::from_retcode(Hdr::default(), RetCode::RetOk),

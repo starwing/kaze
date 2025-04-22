@@ -929,7 +929,6 @@ dependencies = [
  "serde",
  "tokio",
  "tokio-graceful",
- "tokio-shutdown",
  "tower",
 ]
 
@@ -2133,6 +2132,7 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
+ "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
@@ -2172,16 +2172,6 @@ checksum = "8e727b36a1a0e8b74c376ac2211e40c2c8af09fb4013c60d910495810f008e9b"
 dependencies = [
  "rustls",
  "tokio",
-]
-
-[[package]]
-name = "tokio-shutdown"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d12a69e6b9c26d07555489cae0e9015a218899bae97db50a6837fbc67cf54dc7"
-dependencies = [
- "tokio",
- "tracing",
 ]
 
 [[package]]

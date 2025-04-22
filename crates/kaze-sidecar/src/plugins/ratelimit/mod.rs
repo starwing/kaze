@@ -152,3 +152,111 @@ impl ArcPlugin for RateLimit {
 
 #[derive(Hash, Eq, PartialEq)]
 struct LimitKey(Option<u32>, Option<String>);
+#[cfg(test)]
+mod tests {
+    use tokio::time;
+    use super::*;
+
+    #[tokio::test]
+    async fn test_rate_limit_info_acquire_one() {
+        let info = RateLimitInfo {
+            lim: RateLimiter::builder()
+                .max(1)
+                .initial(1)
+                .refill(1)
+                .interval(Duration::from_secs(1))
+                .build(),
+            timeout: Duration::from_secs(5),
+        };
+
+        // First acquire should succeed
+        assert!(info.acquire_one().await);
+
+        // Second acquire should timeout or succeed after refill
+        let now = std::time::Instant::now();
+        let result = info.acquire_one().await;
+        let elapsed = now.elapsed();
+
+        if result {
+            // If succeeded, should have taken close to refill interval
+            assert!(elapsed.as_millis() >= 990);
+        } else {
+            // If failed, timeout should have been triggered
+            assert!(elapsed.as_secs() >= 4);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rate_limit_total_only() {
+        let opt = Options {
+            max: Some(2),
+            initial: 2,
+            refill: 1,
+            interval: DurationString::from(Duration::from_millis(500)),
+            timeout: DurationString::from(Duration::from_millis(100)),
+            per_msg: vec![],
+        };
+
+        let rate_limit = RateLimit::new(&opt);
+
+        // First two requests should pass
+        assert!(rate_limit.acquire_one(1, &"test".to_string()).await);
+        assert!(rate_limit.acquire_one(2, &"test".to_string()).await);
+
+        // Third request should fail due to timeout
+        assert!(!rate_limit.acquire_one(3, &"test".to_string()).await);
+
+        // After waiting, request should succeed again
+        time::sleep(Duration::from_millis(500)).await;
+        assert!(rate_limit.acquire_one(4, &"test".to_string()).await);
+    }
+
+    #[tokio::test]
+    async fn test_rate_limit_per_msg() {
+        let opt = Options {
+            max: None,
+            initial: 0,
+            refill: 0,
+            interval: DurationString::from(Duration::from_secs(1)),
+            timeout: DurationString::from(Duration::from_millis(100)),
+            per_msg: vec![
+                options::PerMsgLimitInfo {
+                    ident: "0.0.0.1".parse().ok(),
+                    body_type: None,
+                    max: 1,
+                    initial: 1,
+                    refill: 1,
+                    interval: DurationString::from(Duration::from_millis(500)),
+                    timeout: DurationString::from(Duration::from_millis(100)),
+                },
+                options::PerMsgLimitInfo {
+                    ident: None,
+                    body_type: Some("test_type".to_string()),
+                    max: 1,
+                    initial: 1,
+                    refill: 1,
+                    interval: DurationString::from(Duration::from_millis(500)),
+                    timeout: DurationString::from(Duration::from_millis(100)),
+                },
+            ],
+        };
+
+        let rate_limit = RateLimit::new(&opt);
+
+        // First request should pass for client 1
+        assert!(rate_limit.acquire_one(1, &"test_type".to_string()).await);
+
+        // Second request should fail due to per-client limit
+        assert!(!rate_limit.acquire_one(1, &"test_type".to_string()).await);
+
+        // Request from different client but same type should fail due to per-type limit
+        assert!(!rate_limit.acquire_one(2, &"test_type".to_string()).await);
+
+        // Request with different type should pass
+        assert!(rate_limit.acquire_one(2, &"other_type".to_string()).await);
+
+        // After waiting, requests should succeed again
+        time::sleep(Duration::from_millis(500)).await;
+        assert!(rate_limit.acquire_one(1, &"test_type".to_string()).await);
+    }
+}
