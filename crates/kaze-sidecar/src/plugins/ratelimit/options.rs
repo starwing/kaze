@@ -4,6 +4,7 @@ use kaze_plugin::{
     clap::Args,
     serde::{Deserialize, Serialize},
     util::parser::DurationString,
+    PluginFactory,
 };
 
 use super::RateLimit;
@@ -41,10 +42,11 @@ pub struct Options {
     pub per_msg: Vec<PerMsgLimitInfo>,
 }
 
-impl Options {
-    /// build a RateLimit instance
-    pub fn build(&self) -> RateLimit {
-        RateLimit::new(self)
+impl PluginFactory for Options {
+    type Plugin = RateLimit;
+
+    fn build(self) -> anyhow::Result<Self::Plugin> {
+        Ok(RateLimit::new(&self))
     }
 }
 

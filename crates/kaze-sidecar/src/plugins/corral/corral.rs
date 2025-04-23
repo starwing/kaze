@@ -286,6 +286,7 @@ impl ConnSource {
 mod tests {
     use super::*;
     use kaze_plugin::tokio_graceful::Shutdown;
+    use kaze_plugin::PluginFactory as _;
     use std::net::SocketAddr;
     use std::str::FromStr;
     use tokio::net::TcpStream;
@@ -298,7 +299,8 @@ mod tests {
             pending_timeout: Duration::from_secs(1).into(),
             limit: Some(100),
         }
-        .build();
+        .build()
+        .unwrap();
         Context::builder()
             .register(corral.clone())
             .build(Shutdown::default().guard());
@@ -344,7 +346,8 @@ mod tests {
             pending_timeout: Duration::from_secs(1).into(),
             limit: Some(2), // Set a very small limit
         }
-        .build();
+        .build()
+        .unwrap();
 
         // Mock context initialization
         Context::builder()

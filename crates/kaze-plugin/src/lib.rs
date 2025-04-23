@@ -3,7 +3,7 @@ mod context;
 mod local;
 mod wrapper;
 
-use std::{any::Any, sync::Arc};
+use std::{any::Any, pin::Pin, sync::Arc};
 
 use tower::util::BoxCloneSyncService;
 
@@ -33,6 +33,20 @@ pub type PipelineCell = CellService<PipelineService>;
 pub trait Plugin: AnyClone + Send + Sync + 'static {
     fn init(&self, context: Context);
     fn context(&self) -> &Context;
+
+    fn run(
+        &self,
+    ) -> Option<
+        Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'static>>,
+    > {
+        None
+    }
+}
+
+pub trait PluginFactory: Send + Sync + 'static {
+    type Plugin: Plugin;
+
+    fn build(self) -> anyhow::Result<Self::Plugin>;
 }
 
 pub trait ArcPlugin: Send + Sync + 'static {

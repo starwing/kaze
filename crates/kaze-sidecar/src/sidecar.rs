@@ -18,7 +18,7 @@ use kaze_plugin::serde::{Deserialize, Serialize};
 use kaze_plugin::service::ServiceExt;
 use kaze_plugin::tokio_graceful::Shutdown;
 use kaze_plugin::util::tower_ext::ServiceExt as _;
-use kaze_plugin::{Context, PipelineService};
+use kaze_plugin::{Context, PipelineService, PluginFactory as _};
 use kaze_resolver::ResolverExt;
 
 use crate::config::{ConfigBuilder, ConfigFileBuilder, ConfigMap};
@@ -94,8 +94,9 @@ impl Options {
                 .build()
                 .await
         });
-        let ratelimit = config.take::<ratelimit::Options>().unwrap().build();
-        let corral = config.take::<corral::Options>().unwrap().build();
+        let ratelimit =
+            config.take::<ratelimit::Options>().unwrap().build()?;
+        let corral = config.take::<corral::Options>().unwrap().build()?;
         let tracker = RpcTracker::new(10);
         let logger = LogService;
 

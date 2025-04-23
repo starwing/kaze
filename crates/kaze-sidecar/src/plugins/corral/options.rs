@@ -4,6 +4,7 @@ use kaze_plugin::{
     clap::Args,
     serde::{Deserialize, Serialize},
     util::parser::{self, DurationString},
+    PluginFactory,
 };
 
 use super::corral::Corral;
@@ -38,9 +39,11 @@ pub struct Options {
     pub idle_timeout: DurationString,
 }
 
-impl Options {
-    pub fn build(self) -> Corral {
-        Corral::new(self)
+impl PluginFactory for Options {
+    type Plugin = Corral;
+
+    fn build(self) -> anyhow::Result<Self::Plugin> {
+        Ok(Corral::new(self))
     }
 }
 

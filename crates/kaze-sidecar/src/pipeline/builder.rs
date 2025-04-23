@@ -2,7 +2,7 @@
 mod tests {
     use kaze_plugin::{
         service::ServiceExt, tokio_graceful::Shutdown, ClapDefault as _,
-        Context, PipelineService,
+        Context, PipelineService, PluginFactory as _,
     };
     use kaze_resolver::ResolverExt;
     use scopeguard::defer;
@@ -35,8 +35,8 @@ mod tests {
         let (tx, rx) = edge.into_split();
 
         let resolver = kaze_resolver::local::Local::new();
-        let ratelimit = ratelimit::Options::default().build();
-        let corral = corral::Options::default().build();
+        let ratelimit = ratelimit::Options::default().build().unwrap();
+        let corral = corral::Options::default().build().unwrap();
         let tracker = RpcTracker::new(10);
 
         let sink = ServiceBuilder::new()
