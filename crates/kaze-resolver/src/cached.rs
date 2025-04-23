@@ -72,3 +72,64 @@ impl<R: Resolver> Resolver for Cached<R> {
             .for_each(|(ident, addr)| f(*ident, *addr));
     }
 }
+#[cfg(test)]
+mod tests {
+    use papaya::HashMap;
+
+    use crate::local::Local;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_cached_resolver() {
+        let mock = Local::from_map(HashMap::from([
+            (1, "127.0.0.1:8080".parse().unwrap()),
+            (2, "127.0.0.1:8081".parse().unwrap()),
+            (3, "127.0.0.1:8082".parse().unwrap()),
+        ]));
+
+        let cached = Cached::new(mock, 100, Duration::from_secs(60));
+
+        // Test add_node
+        cached.add_node(4, "127.0.0.1:8083".parse().unwrap()).await;
+        assert_eq!(
+            cached.get_node(4).await,
+            Some("127.0.0.1:8083".parse().unwrap())
+        );
+
+        // Test get_node
+        assert_eq!(
+            cached.get_node(1).await,
+            Some("127.0.0.1:8080".parse().unwrap())
+        );
+        assert_eq!(cached.get_node(5).await, None);
+
+        // Test visit_nodes
+        let mut results = Vec::new();
+        cached
+            .visit_nodes([1, 2, 3].into_iter(), |id, addr| {
+                results.push((id, addr));
+            })
+            .await;
+        assert_eq!(results.len(), 3);
+
+        // Test visit_masked_nodes and cache
+        let mask = 0xFF;
+        let mut mask_results1 = Vec::new();
+        cached
+            .visit_masked_nodes(1, mask, |id, addr| {
+                mask_results1.push((id, addr));
+            })
+            .await;
+
+        // Call again to verify it uses the cache
+        let mut mask_results2 = Vec::new();
+        cached
+            .visit_masked_nodes(1, mask, |id, addr| {
+                mask_results2.push((id, addr));
+            })
+            .await;
+
+        assert_eq!(mask_results1, mask_results2);
+    }
+}
