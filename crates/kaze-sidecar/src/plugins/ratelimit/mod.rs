@@ -7,13 +7,18 @@ use tokio::{join, select};
 use tracing::error;
 
 use kaze_plugin::{
-    protocol::message::Message, service::OwnedAsyncService,
-    util::parser::DurationString, ArcPlugin,
+    protocol::message::Message, service::AsyncService,
+    util::parser::DurationString, Plugin,
 };
 
 pub use options::Options;
 
+#[derive(Clone)]
 pub struct RateLimit {
+    inner: Arc<Inner>,
+}
+
+struct Inner {
     total: Option<RateLimitInfo>,
     per_msg: papaya::HashMap<LimitKey, RateLimitInfo>,
 }
@@ -39,36 +44,40 @@ impl RateLimitInfo {
 impl RateLimit {
     fn new(opt: &Options) -> Self {
         Self {
-            total: opt.max.map(|max| {
-                let initial = if opt.initial == 0 { max } else { opt.initial };
-                let refill = if opt.refill == 0 { max } else { opt.refill };
-                Self::new_limiter(
-                    max,
-                    initial,
-                    refill,
-                    opt.interval,
-                    opt.timeout,
-                )
-            }),
-            per_msg: opt
-                .per_msg
-                .iter()
-                .map(|info| {
-                    (
-                        LimitKey(
-                            info.ident.map(|ident| ident.to_bits()),
-                            info.body_type.clone(),
-                        ),
-                        Self::new_limiter(
-                            info.max,
-                            info.initial,
-                            info.refill,
-                            info.interval,
-                            info.timeout,
-                        ),
+            inner: Arc::new(Inner {
+                total: opt.max.map(|max| {
+                    let initial =
+                        if opt.initial == 0 { max } else { opt.initial };
+                    let refill =
+                        if opt.refill == 0 { max } else { opt.refill };
+                    Self::new_limiter(
+                        max,
+                        initial,
+                        refill,
+                        opt.interval,
+                        opt.timeout,
                     )
-                })
-                .collect(),
+                }),
+                per_msg: opt
+                    .per_msg
+                    .iter()
+                    .map(|info| {
+                        (
+                            LimitKey(
+                                info.ident.map(|ident| ident.to_bits()),
+                                info.body_type.clone(),
+                            ),
+                            Self::new_limiter(
+                                info.max,
+                                info.initial,
+                                info.refill,
+                                info.interval,
+                                info.timeout,
+                            ),
+                        )
+                    })
+                    .collect(),
+            }),
         }
     }
 
@@ -91,12 +100,12 @@ impl RateLimit {
     }
 
     pub async fn acquire_one(&self, ident: u32, body_type: &String) -> bool {
-        if let Some(info) = &self.total {
+        if let Some(info) = &self.inner.total {
             if !info.acquire_one().await {
                 return false; // timeout
             }
         }
-        let map = self.per_msg.pin_owned();
+        let map = self.inner.per_msg.pin_owned();
         if map.len() == 0 {
             return true;
         }
@@ -117,14 +126,11 @@ impl RateLimit {
     }
 }
 
-impl OwnedAsyncService<Message> for RateLimit {
+impl AsyncService<Message> for RateLimit {
     type Response = Option<Message>;
     type Error = anyhow::Error;
 
-    async fn serve(
-        self: Arc<Self>,
-        msg: Message,
-    ) -> anyhow::Result<Self::Response> {
+    async fn serve(&self, msg: Message) -> anyhow::Result<Self::Response> {
         if !msg.destination().is_local() {
             return Ok(Some(msg));
         }
@@ -143,9 +149,9 @@ impl OwnedAsyncService<Message> for RateLimit {
     }
 }
 
-impl ArcPlugin for RateLimit {
-    fn init(self: &Arc<Self>, _ctx: kaze_plugin::Context) {}
-    fn context(self: &Arc<Self>) -> &kaze_plugin::Context {
+impl Plugin for RateLimit {
+    fn init(&self, _ctx: kaze_plugin::Context) {}
+    fn context(&self) -> &kaze_plugin::Context {
         unimplemented!("RateLimit does not provide context")
     }
 }
@@ -154,8 +160,8 @@ impl ArcPlugin for RateLimit {
 struct LimitKey(Option<u32>, Option<String>);
 #[cfg(test)]
 mod tests {
-    use tokio::time;
     use super::*;
+    use tokio::time;
 
     #[tokio::test]
     async fn test_rate_limit_info_acquire_one() {

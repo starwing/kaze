@@ -13,7 +13,6 @@ use tokio_util::time::delay_queue::Expired;
 use tokio_util::time::{delay_queue::Key, DelayQueue};
 use tracing::error;
 
-use kaze_plugin::service::OwnedAsyncService;
 use kaze_plugin::{
     local_node,
     protocol::{
@@ -24,13 +23,19 @@ use kaze_plugin::{
             Hdr, RetCode,
         },
     },
+    service::AsyncService,
 };
-use kaze_plugin::{ArcPlugin, Context};
+use kaze_plugin::{Context, Plugin};
 
 /// RpcTracker is a service that tracks rpc info.
 ///
 /// It is used to track rpc info and send response when timeout.
+#[derive(Clone)]
 pub struct RpcTracker {
+    inner: Arc<Inner>,
+}
+
+struct Inner {
     rpc_map: HashMap<u32, Info>,
     seq: AtomicU32,
     tx: Sender<Action, ActionRecycler>,
@@ -56,29 +61,31 @@ impl Recycle<Action> for ActionRecycler {
     }
 }
 
-impl ArcPlugin for RpcTracker {
-    fn init(self: &Arc<Self>, context: kaze_plugin::Context) {
-        self.ctx.set(context).unwrap();
+impl Plugin for RpcTracker {
+    fn init(&self, context: kaze_plugin::Context) {
+        self.inner.ctx.set(context).unwrap();
     }
-    fn context(self: &Arc<Self>) -> &Context {
-        self.ctx.get().unwrap()
+    fn context(&self) -> &Context {
+        self.inner.ctx.get().unwrap()
     }
 }
 
 impl RpcTracker {
-    pub fn new(capacity: usize) -> Arc<Self> {
+    pub fn new(capacity: usize) -> Self {
         let (tx, rx) = thingbuf::mpsc::with_recycle(capacity, ActionRecycler);
-        let obj = Arc::new(Self {
-            ctx: OnceLock::new(),
-            rpc_map: HashMap::new(),
-            seq: AtomicU32::new(114514),
-            tx,
-        });
+        let obj = Self {
+            inner: Arc::new(Inner {
+                ctx: OnceLock::new(),
+                rpc_map: HashMap::new(),
+                seq: AtomicU32::new(114514),
+                tx,
+            }),
+        };
         tokio::spawn(obj.clone().run(rx));
         obj
     }
 
-    async fn run(self: Arc<Self>, rx: Receiver<Action, ActionRecycler>) {
+    async fn run(self, rx: Receiver<Action, ActionRecycler>) {
         let mut queue = DelayQueue::new();
         loop {
             let action = if queue.is_empty() {
@@ -103,10 +110,12 @@ impl RpcTracker {
                         continue;
                     };
                     let key = queue.insert(seq, timeout);
-                    self.rpc_map.pin().insert(seq, Info { hdr, key });
+                    self.inner.rpc_map.pin().insert(seq, Info { hdr, key });
                 }
                 Some(Action::Remove(seq)) => {
-                    if let Some(rpc_info) = self.rpc_map.pin().remove(&seq) {
+                    if let Some(rpc_info) =
+                        self.inner.rpc_map.pin().remove(&seq)
+                    {
                         queue.remove(&rpc_info.key);
                     }
                 }
@@ -119,7 +128,7 @@ impl RpcTracker {
 
     async fn handle_expired(&self, ctx: &Context, key: &u32) {
         let msg = {
-            let rpc_map = self.rpc_map.pin();
+            let rpc_map = self.inner.rpc_map.pin();
             let Some(rpc_info) = rpc_map.get(key) else {
                 return;
             };
@@ -136,14 +145,11 @@ impl RpcTracker {
     }
 }
 
-impl OwnedAsyncService<Message> for RpcTracker {
+impl AsyncService<Message> for RpcTracker {
     type Response = Option<Message>;
     type Error = anyhow::Error;
 
-    async fn serve(
-        self: Arc<Self>,
-        msg: Message,
-    ) -> anyhow::Result<Self::Response> {
+    async fn serve(&self, msg: Message) -> anyhow::Result<Self::Response> {
         let res = self.record(msg).await;
         if let Err(e) = res {
             error!(error = %e, "Failed to record rpc info");
@@ -153,7 +159,7 @@ impl OwnedAsyncService<Message> for RpcTracker {
 }
 
 impl RpcTracker {
-    async fn record(self: Arc<Self>, mut req: Message) -> Result<Message> {
+    async fn record(&self, mut req: Message) -> Result<Message> {
         // 1. return req as res if no timeout
         let timeout = req.packet().hdr().timeout;
         if timeout == 0 {
@@ -167,11 +173,14 @@ impl RpcTracker {
         let r = match rpc_type {
             hdr::RpcType::Req(_) => {
                 self.assign_seq(req.packet_mut().hdr_mut());
-                self.tx
+                self.inner
+                    .tx
                     .send(Action::Insert(req.packet().hdr().clone()))
                     .await
             }
-            hdr::RpcType::Rsp(seq) => self.tx.send(Action::Remove(seq)).await,
+            hdr::RpcType::Rsp(seq) => {
+                self.inner.tx.send(Action::Remove(seq)).await
+            }
         };
         if let Err(e) = r {
             error!(error = %e, "Failed to record rpc info");
@@ -185,6 +194,7 @@ impl RpcTracker {
                 let mut seq = *seq;
                 if seq == 0 {
                     seq = self
+                        .inner
                         .seq
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }

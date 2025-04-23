@@ -1,4 +1,4 @@
-use std::{net::Ipv4Addr, str::FromStr, sync::Arc};
+use std::{net::Ipv4Addr, str::FromStr};
 
 use kaze_plugin::{
     clap::Args,
@@ -43,8 +43,8 @@ pub struct Options {
 
 impl Options {
     /// build a RateLimit instance
-    pub fn build(&self) -> Arc<RateLimit> {
-        Arc::new(RateLimit::new(self))
+    pub fn build(&self) -> RateLimit {
+        RateLimit::new(self)
     }
 }
 
