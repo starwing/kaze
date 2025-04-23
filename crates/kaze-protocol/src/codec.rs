@@ -173,7 +173,7 @@ pub fn encode_packet(
 /// A wrapper for other buffer. giving a pos that can rewind.
 ///
 /// It can be used to indicate the decoded position of a buffer, and If needed,
-/// rewind to its begining to retrieve the original buffer.
+/// rewind to its beginning to retrieve the original buffer.
 #[derive(Debug, Clone)]
 pub struct BufWrapper<T> {
     inner: T,

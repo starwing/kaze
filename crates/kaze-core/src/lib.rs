@@ -179,7 +179,7 @@ impl Channel {
         name.to_str().unwrap()
     }
 
-    /// Queu size in bytes of the channel
+    /// Queue size in bytes of the channel
     pub fn size(&self) -> usize {
         unsafe { ffi::kz_size(self.ptr) }
     }

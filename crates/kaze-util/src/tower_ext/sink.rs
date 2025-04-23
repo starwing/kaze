@@ -168,7 +168,7 @@ mod tests {
         let mut cx = noop_context();
         loop {
             let r = Service::poll_ready(&mut sink, &mut cx);
-            // framed alway return Ready in poll_ready, unless the pending buffer is full
+            // framed always return Ready in poll_ready, unless the pending buffer is full
             assert!(r.is_ready());
 
             let packet = Packet::from_hdr(Hdr::default());

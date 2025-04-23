@@ -6,7 +6,7 @@ use kaze_plugin::serde::{Deserialize, Serialize};
 #[command(next_help_heading = "Consul resolver configurations")]
 pub struct Options {
     #[serde(default = "default_consul_addr")]
-    #[arg(long = "consol", required = false, default_missing_value = default_consul_addr())]
+    #[arg(long = "consul", required = false, default_missing_value = default_consul_addr())]
     pub addr: String,
 
     /// consul token

@@ -39,7 +39,7 @@ pub struct Packet {
 
 // packet body is empty or wraps a BufWrapper<BytesMut>, the BytesMut holding
 // the whole data buffer ([hdr_size(4)][hdr][body]) for packet, and BufWrapper
-// pointing the begining of the body bytes.
+// pointing the beginning of the body bytes.
 enum PacketBody {
     Empty,
     FromBuf(BufWrapper<BytesMut>),

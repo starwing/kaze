@@ -368,7 +368,7 @@ static int kz_futex_waitv(struct futex_waitv *waiters, int count, int millis) {
     struct timespec ts;
     int             ret;
 
-    /* specifying NULL would prevent the call from being interruptable
+    /* specifying NULL would prevent the call from being interruptible
      * cf. https://outerproduct.net/futex-dictionary.html#linux */
     if (millis <= 0) millis = INT_MAX; /* a long time */
 
@@ -421,7 +421,7 @@ static int kz_futex_wait(void *addr, uint32_t ifValue, int millis) {
     struct timespec ts;
     int             ret;
 
-    /* specifying NULL would prevent the call from being interruptable
+    /* specifying NULL would prevent the call from being interruptible
      * cf. https://outerproduct.net/futex-dictionary.html#linux */
     if (millis <= 0) millis = INT_MAX; /* a long time */
 
@@ -1326,7 +1326,7 @@ KZ_API kz_State *kz_open(const char *name, int flags, size_t bufsize) {
     kz_check_waitv();
 #endif
 
-    /* calcuate the size of the shared memory object */
+    /* calculate the size of the shared memory object */
     S->shm_size = kz_get_aligned_size(sizeof(kz_ShmHdr) + bufsize, KZ_ALIGN);
     queue_size = (S->shm_size - sizeof(kz_ShmHdr)) / 2;
 
