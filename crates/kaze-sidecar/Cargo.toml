@@ -21,7 +21,7 @@ metrics.workspace = true
 papaya.workspace = true
 thingbuf.workspace = true
 tokio-stream.workspace = true
-tokio-util.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
 tokio.workspace = true
 toml.workspace = true
 tower.workspace = true

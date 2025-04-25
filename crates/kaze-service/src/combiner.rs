@@ -134,6 +134,32 @@ where
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum Either<A, B> {
+    Left(A),
+    Right(B),
+}
+
+impl<Request, A, B> AsyncService<Request> for Either<A, B>
+where
+    Request: Send + 'static,
+    A: AsyncService<Request> + Sync,
+    B: AsyncService<Request, Response = A::Response, Error = A::Error> + Sync,
+{
+    type Response = A::Response;
+    type Error = A::Error;
+
+    async fn serve(
+        &self,
+        req: Request,
+    ) -> Result<Self::Response, Self::Error> {
+        match self {
+            Self::Left(a) => a.serve(req).await,
+            Self::Right(b) => b.serve(req).await,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::ServiceExt as _;
@@ -524,5 +550,33 @@ mod tests {
 
         let result = with_prefix_and_suffix.serve("request".to_string()).await;
         assert_eq!(result, Ok("Base: Prefix: request [delayed]".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_either_service() {
+        type StringEither = Either<StringService, StringService>;
+        // Test Left variant
+        let left_service = StringEither::Left(StringService::new("Left: "));
+        let result = left_service.serve("test".to_string()).await;
+        assert_eq!(result, Ok("Left: test".to_string()));
+
+        // Test Right variant
+        let right_service = StringEither::Right(StringService::new("Right: "));
+        let result = right_service.serve("test".to_string()).await;
+        assert_eq!(result, Ok("Right: test".to_string()));
+
+        type FailableEither = Either<FailableService, FailableService>;
+        // Test with failables
+        let success_service =
+            FailableEither::Left(FailableService::new(false));
+        let result = success_service.serve("test".to_string()).await;
+        assert_eq!(result, Ok("test [ok]".to_string()));
+
+        let fail_service = FailableEither::Right(FailableService::new(true));
+        let result = fail_service.serve("test".to_string()).await;
+        assert_eq!(
+            result.map_err(|e| format!("{e}")),
+            Err("Service failed".to_string())
+        );
     }
 }

@@ -38,7 +38,7 @@ impl ConfigBuilder {
         T: for<'a> Deserialize<'a> + Serialize + clap::Args + 'static,
     >(
         mut self,
-        name: &str,
+        name: impl ToString,
     ) -> Self {
         // add flags from T to the command
         self.cmd = T::augment_args_for_update(self.cmd);
