@@ -1,3 +1,5 @@
+use std::convert::Infallible;
+
 use super::AsyncService;
 
 #[derive(Clone, Copy)]
@@ -71,6 +73,12 @@ pub struct FilterLayer<F> {
     filter: F,
 }
 
+impl FilterLayer<FilterIdentity> {
+    pub fn identity() -> Self {
+        Self::new(FilterIdentity)
+    }
+}
+
 impl<F> FilterLayer<F> {
     pub fn new(filter: F) -> Self {
         Self { filter }
@@ -131,6 +139,24 @@ where
         } else {
             Ok(None)
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct FilterIdentity;
+
+impl<Request> AsyncService<Request> for FilterIdentity
+where
+    Request: Send + 'static,
+{
+    type Response = Option<Request>;
+    type Error = Infallible;
+
+    async fn serve(
+        &self,
+        req: Request,
+    ) -> Result<Self::Response, Self::Error> {
+        Ok(Some(req))
     }
 }
 
@@ -525,10 +551,14 @@ mod tests {
         // create data processing service
         let processor = StringService::new("Processed: ");
 
+        let ident = FilterLayer::from(FilterIdentity);
+
         // build filter chain and then attach processing service
         let service_chain = ServiceBuilder::new()
+            .layer(ident)
             .layer(filter1.into_filter())
             .layer(filter2.into_filter())
+            .layer(FilterLayer::identity())
             .service(processor.map_response(Some));
 
         // test various inputs

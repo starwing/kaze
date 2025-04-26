@@ -17,12 +17,7 @@ impl Default for Local {
     }
 }
 
-impl Plugin for Local {
-    fn init(&self, _context: kaze_plugin::Context) {}
-    fn context(&self) -> &kaze_plugin::Context {
-        unreachable!("Local resolver does not have a context")
-    }
-}
+impl Plugin for Local {}
 
 impl Resolver for Local {
     async fn add_node(&self, ident: u32, addr: SocketAddr) {

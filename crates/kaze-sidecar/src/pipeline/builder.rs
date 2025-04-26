@@ -31,7 +31,7 @@ mod tests {
         defer! {
             kaze_edge::Edge::unlink(prefix, ident).unwrap();
         }
-        let edge = dbg!(edge).build().unwrap();
+        let edge = edge.build().unwrap();
         let (tx, rx) = edge.into_split();
 
         let resolver = kaze_resolver::local::Local::new();

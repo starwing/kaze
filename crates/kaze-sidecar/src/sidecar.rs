@@ -6,6 +6,7 @@ use kaze_plugin::clap::{
     crate_version, CommandFactory, FromArgMatches, Parser,
 };
 use tokio::join;
+use tokio_util::task::TaskTracker;
 use tower::util::BoxCloneSyncService;
 use tower::ServiceBuilder;
 use tracing::level_filters::LevelFilter;
@@ -18,7 +19,7 @@ use kaze_plugin::serde::{Deserialize, Serialize};
 use kaze_plugin::service::ServiceExt;
 use kaze_plugin::tokio_graceful::Shutdown;
 use kaze_plugin::util::tower_ext::ServiceExt as _;
-use kaze_plugin::{Context, PipelineService, PluginFactory as _};
+use kaze_plugin::{Context, PipelineService, PluginFactory};
 use kaze_resolver::ResolverExt;
 
 use crate::config::{ConfigBuilder, ConfigFileBuilder, ConfigMap};
@@ -62,8 +63,11 @@ impl Options {
                 .replace("{version}", VERSION.as_str())
         };
         let log = config.get::<log::Options>();
-        let (non_block, _guard) = log::Options::build_writer(log, expander)
-            .context("failed to build log")?;
+        let (non_block, _guard) = log
+            .map(|log| log::Options::build_writer(log, expander))
+            .transpose()
+            .context("failed to build log")?
+            .unzip();
 
         // install tracing with configuration
         tracing_subscriber::registry()
@@ -71,12 +75,7 @@ impl Options {
             .with(non_block.map(|non_block| {
                 fmt::layer().with_ansi(false).with_writer(non_block)
             }))
-            .with(
-                EnvFilter::builder()
-                    .with_default_directive(LevelFilter::INFO.into())
-                    .with_env_var("KAZE_LOG")
-                    .from_env_lossy(),
-            )
+            .with(env_filter())
             .init();
 
         let edge = config
@@ -128,8 +127,10 @@ impl Options {
         Ok(Sidecar {
             ctx,
             options,
+            _shutdown: shutdown,
+            _tracker: TaskTracker::new(),
             _unlink_guard,
-            _guard,
+            _log_guard: _guard,
         })
     }
 
@@ -166,11 +167,29 @@ impl Options {
 pub struct Sidecar {
     ctx: Context,
     options: Options,
+    _shutdown: Shutdown,
+    _tracker: TaskTracker,
     _unlink_guard: kaze_edge::UnlinkGuard,
-    _guard: Option<WorkerGuard>,
+    _log_guard: Option<WorkerGuard>,
 }
 
 impl Sidecar {
+    pub fn new(
+        ctx: Context,
+        options: Options,
+        _shutdown: Shutdown,
+        _unlink_guard: kaze_edge::UnlinkGuard,
+        _log_guard: Option<WorkerGuard>,
+    ) -> Self {
+        Self {
+            ctx,
+            options,
+            _shutdown,
+            _tracker: TaskTracker::new(),
+            _unlink_guard,
+            _log_guard,
+        }
+    }
     /// get the thread count
     pub fn thread_count(&self) -> Option<usize> {
         self.options.threads
@@ -198,7 +217,14 @@ impl Sidecar {
     }
 }
 
-static VERSION: LazyLock<String> = LazyLock::new(|| {
+fn env_filter() -> EnvFilter {
+    EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .with_env_var("KAZE_LOG")
+        .from_env_lossy()
+}
+
+pub(crate) static VERSION: LazyLock<String> = LazyLock::new(|| {
     let git_version = bugreport::git_version!(fallback = "");
 
     if git_version.is_empty() {

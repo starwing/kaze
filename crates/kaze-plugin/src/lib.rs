@@ -31,8 +31,11 @@ pub type PipelineCell = CellService<PipelineService>;
 
 /// a trait that inits the plugin, and provides a context to the plugin.
 pub trait Plugin: AnyClone + Send + Sync + 'static {
-    fn init(&self, context: Context);
-    fn context(&self) -> &Context;
+    fn init(&self, _ctx: Context) {}
+
+    fn context(&self) -> &Context {
+        unimplemented!("context() is not implemented for Plugin");
+    }
 
     fn run(
         &self,
@@ -44,7 +47,7 @@ pub trait Plugin: AnyClone + Send + Sync + 'static {
 }
 
 pub trait PluginFactory: Send + Sync + 'static {
-    type Plugin: Plugin;
+    type Plugin: Plugin + Clone;
 
     fn build(self) -> anyhow::Result<Self::Plugin>;
 }

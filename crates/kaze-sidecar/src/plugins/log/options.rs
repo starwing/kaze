@@ -3,12 +3,16 @@ use std::path::PathBuf;
 use anyhow::Context as _;
 use kaze_plugin::clap::Args;
 use kaze_plugin::serde::{Deserialize, Serialize};
+use kaze_plugin::PluginFactory;
 use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
 use tracing_appender::rolling::Rotation;
+
+use super::LogService;
 
 /// log file configuration
 #[derive(Args, Serialize, Deserialize, Clone, Debug)]
 #[serde(crate = "kaze_plugin::serde")]
+#[group(id = "LogOptions")]
 #[command(next_help_heading = "Log file configurations")]
 pub struct Options {
     /// log file directory
@@ -115,29 +119,29 @@ mod serde_rotation {
 impl Options {
     /// build non-blocking writer from configuration
     pub fn build_writer(
-        conf: Option<&Self>,
+        &self,
         expander: impl FnOnce(&str) -> String,
-    ) -> anyhow::Result<(Option<NonBlocking>, Option<WorkerGuard>)> {
-        Ok(conf
-            .and_then(|conf| {
-                let mut builder = tracing_appender::rolling::Builder::new();
-                if let Some(suffix) = &conf.suffix {
-                    builder = builder.filename_suffix(suffix);
-                }
-                if let Some(size) = conf.max_count {
-                    builder = builder.max_log_files(size);
-                }
-                Some(
-                    builder
-                        .filename_prefix(expander(&conf.prefix))
-                        .rotation(conf.rotation.clone())
-                        .build(conf.directory.as_path())
-                        .context("Failed to build appender"),
-                )
-            })
-            .map_or(Ok(None), |r| r.map(Some))?
-            .map(|appender| NonBlocking::new(appender))
-            .map(|(non_block, guard)| (Some(non_block), Some(guard)))
-            .unwrap_or((None, None)))
+    ) -> anyhow::Result<(NonBlocking, WorkerGuard)> {
+        let mut builder = tracing_appender::rolling::Builder::new();
+        if let Some(suffix) = &self.suffix {
+            builder = builder.filename_suffix(suffix);
+        }
+        if let Some(size) = self.max_count {
+            builder = builder.max_log_files(size);
+        }
+        let appender = builder
+            .filename_prefix(expander(&self.prefix))
+            .rotation(self.rotation.clone())
+            .build(self.directory.as_path())
+            .context("Failed to build appender")?;
+        Ok(NonBlocking::new(appender))
+    }
+}
+
+impl PluginFactory for Options {
+    type Plugin = LogService;
+
+    fn build(self) -> anyhow::Result<Self::Plugin> {
+        Ok(LogService)
     }
 }

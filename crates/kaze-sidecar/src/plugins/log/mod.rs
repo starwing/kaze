@@ -1,11 +1,13 @@
 mod options;
 
-use kaze_plugin::{protocol::message::Message, service::AsyncService};
+use kaze_plugin::{protocol::message::Message, service::AsyncService, Plugin};
 pub use options::Options;
 use tracing::{debug, error, info, trace, warn};
 
 #[derive(Debug, Clone, Copy)]
 pub struct LogService;
+
+impl Plugin for LogService {}
 
 impl AsyncService<Message> for LogService {
     type Response = Option<Message>;

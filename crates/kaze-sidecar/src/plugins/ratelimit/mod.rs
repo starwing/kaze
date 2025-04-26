@@ -149,12 +149,7 @@ impl AsyncService<Message> for RateLimit {
     }
 }
 
-impl Plugin for RateLimit {
-    fn init(&self, _ctx: kaze_plugin::Context) {}
-    fn context(&self) -> &kaze_plugin::Context {
-        unimplemented!("RateLimit does not provide context")
-    }
-}
+impl Plugin for RateLimit {}
 
 #[derive(Hash, Eq, PartialEq)]
 struct LimitKey(Option<u32>, Option<String>);

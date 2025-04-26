@@ -4,11 +4,15 @@ use kaze_plugin::{
     clap::Args,
     serde::{Deserialize, Serialize},
     util::parser::DurationString,
+    PluginFactory,
 };
+
+use super::PrometheusService;
 
 /// prometheus push gateway configuration
 #[derive(Args, Serialize, Deserialize, Clone, Debug)]
 #[serde(crate = "kaze_plugin::serde")]
+#[group(id = "PrometheusOptions")]
 #[command(next_help_heading = "Prometheus metrics configurations")]
 pub struct Options {
     /// prometheus metrics endpoint
@@ -37,6 +41,14 @@ pub struct Options {
     /// prometheus push password
     #[arg(long = "metrics-push-password")]
     pub password: Option<String>,
+}
+
+impl PluginFactory for Options {
+    type Plugin = PrometheusService;
+
+    fn build(self) -> anyhow::Result<Self::Plugin> {
+        Ok(PrometheusService)
+    }
 }
 
 fn default_metrics_listening() -> SocketAddr {

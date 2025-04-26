@@ -200,12 +200,7 @@ mod tests {
         value: String,
     }
 
-    impl Plugin for TestComponent {
-        fn init(&self, _context: crate::Context) {}
-        fn context(&self) -> &Context {
-            unimplemented!()
-        }
-    }
+    impl Plugin for TestComponent {}
 
     struct TestFuture {
         complete: bool,
