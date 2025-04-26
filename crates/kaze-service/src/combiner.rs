@@ -160,6 +160,21 @@ where
     }
 }
 
+impl<A, B, S> tower::Layer<S> for Either<A, B>
+where
+    A: tower::Layer<S>,
+    B: tower::Layer<S>,
+{
+    type Service = Either<A::Service, B::Service>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        match self {
+            Either::Left(a) => Either::Left(a.layer(inner)),
+            Either::Right(b) => Either::Right(b.layer(inner)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::ServiceExt as _;
