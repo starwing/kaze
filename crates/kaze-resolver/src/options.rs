@@ -16,6 +16,7 @@ use crate::{Resolver, ResolverNoPlugin, cached::Cached, local::Local};
 /// local resolver configurations
 #[derive(Args, Serialize, Deserialize, Clone, Debug)]
 #[command(next_help_heading = "Local resolver configurations")]
+#[group(id = "LocalOptions")]
 pub struct Options {
     /// Size of resolver mask cache
     #[serde(default = "default_local_cache_size")]

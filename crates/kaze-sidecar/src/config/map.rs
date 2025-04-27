@@ -109,7 +109,7 @@ pub struct ConfigMerger {
 
 impl ConfigMerger {
     /// create a new ConfigMerger
-    pub fn new(
+    fn new(
         map: HashMap<TypeId, Box<dyn Any>>,
         mergers: MergeTable,
         matches: clap::ArgMatches,

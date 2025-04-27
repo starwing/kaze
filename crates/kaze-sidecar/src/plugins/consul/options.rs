@@ -4,6 +4,7 @@ use kaze_plugin::serde::{Deserialize, Serialize};
 #[derive(Args, Serialize, Deserialize, Clone, Debug)]
 #[serde(crate = "kaze_plugin::serde")]
 #[command(next_help_heading = "Consul resolver configurations")]
+#[group(id = "ConsulOptions")]
 pub struct Options {
     #[serde(default = "default_consul_addr")]
     #[arg(long = "consul", required = false, default_missing_value = default_consul_addr())]

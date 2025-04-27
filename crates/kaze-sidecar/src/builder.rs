@@ -1,27 +1,43 @@
 use anyhow::Context as _;
 use clap::{CommandFactory as _, FromArgMatches as _};
-use tower::{layer::util::Stack, Layer};
+use tower::{
+    layer::util::{Identity, Stack},
+    util::BoxCloneSyncService,
+    Layer, ServiceBuilder,
+};
+use tracing::{level_filters::LevelFilter, subscriber::DefaultGuard};
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::{
+    layer::SubscriberExt as _, util::SubscriberInitExt as _, EnvFilter,
+};
 
 use kaze_plugin::{
+    protocol::{
+        message::Message,
+        service::{SinkMessage, ToMessageService},
+    },
     serde::{Deserialize, Serialize},
-    service::{FilterChain, FilterIdentity},
-    ContextBuilder, PluginFactory,
+    service::{AsyncService, FilterChain, ServiceExt as _},
+    tokio_graceful::Shutdown,
+    Context, ContextBuilder, PipelineService, PluginFactory,
 };
+use kaze_resolver::{Resolver, ResolverExt as _};
 
 use crate::{
     config::{ConfigBuilder, ConfigFileBuilder, ConfigMap},
+    plugins::{corral, log},
+    sidecar::{Sidecar, VERSION},
     Options,
 };
 
-/*
-pub struct SidecarBuilder<L> {
-    cfg: ConfigBuilder,
-    layer: L,
+pub struct SidecarBuilder<State> {
+    state: State,
+    shutdown: Shutdown,
     temp_log: DefaultGuard,
 }
 
-impl SidecarBuilder<tower::layer::util::Identity> {
-    pub fn new() -> Self {
+impl SidecarBuilder<StateFilter<Identity>> {
+    pub fn new(shutdown: Shutdown) -> Self {
         // init intial log
         let temp_log = tracing_subscriber::registry()
             .with(tracing_subscriber::fmt::layer())
@@ -29,11 +45,9 @@ impl SidecarBuilder<tower::layer::util::Identity> {
             .set_default();
 
         let cfg = Self::new_config_builder(Options::command());
-        let layer = tower::layer::util::Identity::new();
-
         Self {
-            cfg,
-            layer,
+            state: StateFilter::new(cfg),
+            shutdown,
             temp_log,
         }
     }
@@ -46,11 +60,11 @@ impl SidecarBuilder<tower::layer::util::Identity> {
     }
 }
 
-impl<L> SidecarBuilder<L> {
+impl<L> SidecarBuilder<StateFilter<L>> {
     pub fn add<T>(
         self,
         name: impl ToString,
-    ) -> SidecarBuilder<Stack<L, BuilderLayer<T>>>
+    ) -> SidecarBuilder<StateFilter<Stack<PluginCreator<T>, L>>>
     where
         T: PluginFactory
             + for<'a> Deserialize<'a>
@@ -58,33 +72,44 @@ impl<L> SidecarBuilder<L> {
             + clap::Args
             + 'static,
     {
-        let cfg = self.cfg.add::<T>(name);
-        // assume called by:
-        // SidecarBuilder::().add::<A>().add::<B>().add::<C>()
-        // so the stack is:
-        // Stack<Stack<Stack<Identity, A>, B>, C>
-        // after call layer(S) on this type gets:
-        // PluginLayer<C, PluginLayer<B, PluginLayer<A, S>>>
-        // it's PluginLayer<Current, Prev>
-        let stack = Stack::new(self.layer, BuilderLayer::<T>::new());
         SidecarBuilder {
-            cfg,
-            layer: stack,
+            state: self.state.add(name),
             temp_log: self.temp_log,
+            shutdown: self.shutdown,
         }
     }
-}
 
-impl<L> SidecarBuilder<L> {
-    pub fn build(self) -> anyhow::Result<Sidecar>
+    pub fn debug_assert(mut self) -> Self {
+        self.state = self.state.debug_assert();
+        self
+    }
+
+    pub fn build_filter<F>(
+        self,
+    ) -> anyhow::Result<
+        SidecarBuilder<
+            StatePipeline<
+                F,
+                impl AsyncService<
+                        Message,
+                        Response = Option<()>,
+                        Error = anyhow::Error,
+                    > + Clone,
+                impl Resolver + Clone,
+            >,
+        >,
+    >
     where
-        L: Layer<PluginIdentity, Service: BuilderPluginMaker>,
+        L: Layer<
+            anyhow::Result<(FilterIdentity, ConfigMap, ContextBuilder)>,
+            Service = anyhow::Result<(F, ConfigMap, ContextBuilder)>,
+        >,
     {
-        let mut config = Self::new_config_map(self.cfg.debug_assert())?;
+        let (mut config, filter_builder) = self.state.build_config()?;
 
         // make up the log guard
         let _log_guard = config
-            .take::<log::Options>()
+            .get::<log::Options>()
             .map(|log| {
                 Self::init_log(
                     config.get::<kaze_edge::Options>().unwrap(),
@@ -122,29 +147,92 @@ impl<L> SidecarBuilder<L> {
             .register(tx.clone())
             .register(rx);
 
-        let plugin_maker = self.layer.layer(PluginIdentity);
-        let (filter, cb) = plugin_maker.make_plugin(&mut config, cb)?;
+        let (filter, config, cb) = filter_builder.build(config, cb)?;
 
         let raw_sink = ServiceBuilder::new()
             .layer(corral.into_filter())
             .layer(tx.into_filter())
             .service(SinkMessage.map_response(|()| Some(())));
 
-        let sink = construct_service(filter, resolver, raw_sink);
+        Ok(SidecarBuilder {
+            state: StatePipeline {
+                filter,
+                raw_sink,
+                config,
+                cb,
+                resolver,
+                _unlink_guard,
+                _log_guard,
+            },
+            shutdown: self.shutdown,
+            temp_log: self.temp_log,
+        })
+    }
 
-        fn construct_service<Request, Response, F, FS, RS>(
+    fn init_log(
+        edge: &kaze_edge::Options,
+        log: &log::Options,
+    ) -> anyhow::Result<WorkerGuard> {
+        let expander = |prefix: &str| -> String {
+            prefix
+                .replace("{name}", edge.name.as_str())
+                .replace("{ident}", &edge.ident.to_string())
+                .replace("{version}", VERSION.as_str())
+        };
+        let (non_block, guard) = log::Options::build_writer(log, expander)
+            .context("failed to build log")?;
+
+        // install tracing with configuration
+        let result = tracing_subscriber::registry()
+            .with(tracing_subscriber::fmt::layer())
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_writer(non_block),
+            )
+            .with(env_filter())
+            .try_init();
+
+        if let Err(err) = result {
+            // FIXME: work around for tracing-log double setting.
+            if err.to_string().contains("SetLoggerError") {}
+        } else {
+            result?;
+        }
+
+        Ok(guard)
+    }
+}
+
+impl<F, RS, R> SidecarBuilder<StatePipeline<F, RS, R>> {
+    pub fn build_sidecar<FS>(self) -> anyhow::Result<Sidecar>
+    where
+        F: Layer<RS, Service = FS>,
+        FS: AsyncService<Message, Response = Option<()>, Error = anyhow::Error>
+            + Sync
+            + Send
+            + Clone
+            + 'static,
+        RS: AsyncService<Message>,
+        R: Resolver + Clone,
+    {
+        let sink = construct_service(
+            self.state.filter,
+            self.state.resolver,
+            self.state.raw_sink,
+        );
+
+        fn construct_service<F, FS, RS>(
             filter: F,
             resolver: impl Resolver + Clone,
             raw_sink: RS,
         ) -> PipelineService
         where
-            Request: Send + 'static,
-            Response: Send + 'static,
             F: Layer<RS, Service = FS>,
-            RS: AsyncService<Request>,
+            RS: AsyncService<Message>,
             FS: AsyncService<
                     Message,
-                    Response = Option<Response>,
+                    Response = Option<()>,
                     Error = anyhow::Error,
                 > + Sync
                 + Send
@@ -162,219 +250,18 @@ impl<L> SidecarBuilder<L> {
             BoxCloneSyncService::new(sink.into_tower())
         }
 
-        let shutdown = Shutdown::default();
-        let ctx = cb.build(shutdown.guard());
+        let ctx = self.state.cb.build(self.shutdown.guard());
         ctx.sink().set(sink);
 
+        let mut config = self.state.config;
         let options = config.take::<Options>().unwrap();
         Ok(Sidecar::new(
             ctx,
             options,
-            shutdown,
-            _unlink_guard,
-            _log_guard,
+            self.shutdown,
+            self.state._unlink_guard,
+            self.state._log_guard,
         ))
-    }
-
-    fn new_config_map(
-        config_builder: ConfigBuilder,
-    ) -> anyhow::Result<ConfigMap> {
-        let merger = config_builder.get_matches();
-        let options = Options::from_arg_matches(merger.arg_matches())
-            .context("failed to parse options")?;
-
-        let mut filefinder = ConfigFileBuilder::default();
-        if let Some(path) = &options.config {
-            filefinder = filefinder.add_file(path.clone());
-        }
-
-        let content = filefinder.build().context("build file finder error")?;
-        let mut config =
-            merger.build(content).context("merger build error")?;
-        config.insert(options);
-        Ok(config)
-    }
-
-    fn init_log(
-        edge: &kaze_edge::Options,
-        log: log::Options,
-    ) -> anyhow::Result<WorkerGuard> {
-        let expander = |prefix: &str| -> String {
-            prefix
-                .replace("{name}", edge.name.as_str())
-                .replace("{ident}", &edge.ident.to_string())
-                .replace("{version}", VERSION.as_str())
-        };
-        let (non_block, guard) = log::Options::build_writer(&log, expander)
-            .context("failed to build log")?;
-
-        // install tracing with configuration
-        tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer())
-            .with(fmt::layer().with_ansi(false).with_writer(non_block))
-            .with(env_filter())
-            .init();
-
-        Ok(guard)
-    }
-}
-
-pub trait BuilderPluginMaker {
-    type Filter<Request, Response, S>: Send
-        + Sync
-        + 'static
-        + Layer<
-            S,
-            Service: Send
-                         + Sized
-                         + Sync
-                         + Clone
-                         + AsyncService<
-                Request,
-                Response = Option<Response>,
-                Error = anyhow::Error,
-            >,
-        >
-    where
-        S: Clone
-            + Sized
-            + Sync
-            + Send
-            + 'static
-            + AsyncService<
-                Request,
-                Response = Option<Response>,
-                Error = anyhow::Error,
-            >;
-
-    fn make_plugin<Request, Response, S>(
-        self,
-        cfg: &mut ConfigMap,
-        cb: kaze_plugin::ContextBuilder,
-    ) -> anyhow::Result<(Self::Filter<Request, Response, S>, ContextBuilder)>
-    where
-        S: Sync
-            + Clone
-            + Send
-            + 'static
-            + AsyncService<
-                Request,
-                Response = Option<Response>,
-                Error = anyhow::Error,
-            >;
-}
-
-pub struct BuilderLayer<T> {
-    _marker: std::marker::PhantomData<T>,
-}
-
-impl<T> BuilderLayer<T> {
-    fn new() -> Self {
-        Self {
-            _marker: std::marker::PhantomData,
-        }
-    }
-}
-
-impl<T, S> tower::layer::Layer<S> for BuilderLayer<T>
-where
-    T: PluginFactory,
-{
-    type Service = PluginLayer<T, S>;
-
-    fn layer(&self, inner: S) -> Self::Service {
-        PluginLayer::new(inner)
-    }
-}
-
-pub struct PluginLayer<T, Prev> {
-    prev: Prev,
-    _marker: std::marker::PhantomData<T>,
-}
-
-impl<T, Prev> PluginLayer<T, Prev> {
-    fn new(prev: Prev) -> Self {
-        Self {
-            prev,
-            _marker: std::marker::PhantomData,
-        }
-    }
-}
-
-impl<Curr, Prev> BuilderPluginMaker for PluginLayer<Curr, Prev>
-where
-    Curr: PluginFactory,
-    Curr::Plugin: Clone
-        + AsyncService<
-            Message,
-            Response = Option<Message>,
-            Error = anyhow::Error,
-        > + Send
-        + Sync
-        + 'static,
-    Prev: BuilderPluginMaker,
-    Prev::Filter<Message, (), Curr::Plugin>: AsyncService<Message, Response = Option<()>, Error = anyhow::Error>
-        + Send
-        + Sync
-        + Clone
-        + 'static,
-    Prev::Filter<Message, Message, Curr::Plugin>: AsyncService<
-            Message,
-            Response = Option<Message>,
-            Error = anyhow::Error,
-        > + Send
-        + Sync
-        + Clone
-        + 'static,
-{
-    type Filter<
-        S: Clone
-            + Sync
-            + Send
-            + 'static
-            + AsyncService<Message, Response = Option<()>>,
-    > = Either<Prev::Filter<S>, FilterLayer<Prev::Filter<Curr::Plugin>>>;
-
-    fn make_plugin<S>(
-        self,
-        cfg: &mut ConfigMap,
-        cb: kaze_plugin::ContextBuilder,
-    ) -> anyhow::Result<(Self::Filter<S>, ContextBuilder)> {
-        let (prev_filter, cb) = self.prev.make_plugin(cfg, cb)?;
-
-        if let Some(opt) = cfg.take::<Curr>() {
-            let plugin = Curr::build(opt)?;
-            let cb = cb.register(plugin.clone());
-            return Ok((
-                Either::Right(FilterLayer::new(prev_filter.layer(plugin))),
-                cb,
-            ));
-        }
-
-        Ok((Either::Left(prev_filter), cb))
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct PluginIdentity;
-
-impl BuilderPluginMaker for PluginIdentity {
-    type Filter<S> = PluginIdentity;
-
-    fn make_plugin<S>(
-        self,
-        _cfg: &mut ConfigMap,
-        cb: kaze_plugin::ContextBuilder,
-    ) -> anyhow::Result<(Self::Filter<S>, ContextBuilder)> {
-        Ok((PluginIdentity, cb))
-    }
-}
-
-impl<S> Layer<S> for PluginIdentity {
-    type Service = S;
-
-    fn layer(&self, inner: S) -> Self::Service {
-        inner
     }
 }
 
@@ -384,28 +271,27 @@ fn env_filter() -> EnvFilter {
         .with_env_var("KAZE_LOG")
         .from_env_lossy()
 }
-        */
 
-// ***************************************************************************
-
-pub struct PipelineBuilder<L> {
-    cfg: ConfigBuilder,
+pub struct StateFilter<L> {
+    config_builder: ConfigBuilder,
     layer: L,
 }
 
-impl PipelineBuilder<tower::layer::util::Identity> {
-    pub fn new() -> Self {
-        let cfg = ConfigBuilder::new(Options::command());
-        let layer = tower::layer::util::Identity::new();
-        Self { cfg, layer }
+impl StateFilter<Identity> {
+    fn new(cfg: ConfigBuilder) -> Self {
+        let layer = Identity::new();
+        Self {
+            config_builder: cfg,
+            layer,
+        }
     }
 }
 
-impl<L> PipelineBuilder<L> {
-    pub fn add<T>(
+impl<L> StateFilter<L> {
+    fn add<T>(
         self,
         name: impl ToString,
-    ) -> PipelineBuilder<Stack<PluginCreator<T>, L>>
+    ) -> StateFilter<Stack<PluginCreator<T>, L>>
     where
         T: PluginFactory
             + for<'a> Deserialize<'a>
@@ -413,29 +299,21 @@ impl<L> PipelineBuilder<L> {
             + clap::Args
             + 'static,
     {
-        let cfg = self.cfg.add::<T>(name);
+        let cfg = self.config_builder.add::<T>(name);
         let stack = Stack::new(PluginCreator::<T>::new(), self.layer);
-        PipelineBuilder { cfg, layer: stack }
+        StateFilter {
+            config_builder: cfg,
+            layer: stack,
+        }
     }
 
-    pub fn build<F>(
-        self,
-        cb: ContextBuilder,
-    ) -> anyhow::Result<(F, ConfigMap, ContextBuilder)>
-    where
-        L: Layer<
-            anyhow::Result<(FilterIdentity, ConfigMap, ContextBuilder)>,
-            Service = anyhow::Result<(F, ConfigMap, ContextBuilder)>,
-        >,
-    {
-        let config = Self::new_config_map(self.cfg.debug_assert())?;
-        self.layer.layer(Ok((FilterIdentity, config, cb)))
+    fn debug_assert(mut self) -> Self {
+        self.config_builder = self.config_builder.debug_assert();
+        self
     }
 
-    fn new_config_map(
-        config_builder: ConfigBuilder,
-    ) -> anyhow::Result<ConfigMap> {
-        let merger = config_builder.get_matches();
+    fn build_config(self) -> anyhow::Result<(ConfigMap, FilterBuilder<L>)> {
+        let merger = self.config_builder.get_matches();
         let options = Options::from_arg_matches(merger.arg_matches())
             .context("failed to parse options")?;
 
@@ -448,7 +326,31 @@ impl<L> PipelineBuilder<L> {
         let mut config =
             merger.build(content).context("merger build error")?;
         config.insert(options);
-        Ok(config)
+        Ok((config, FilterBuilder::new(self.layer)))
+    }
+}
+
+pub struct FilterBuilder<L> {
+    layer: L,
+}
+
+impl<L> FilterBuilder<L> {
+    fn new(layer: L) -> Self {
+        Self { layer }
+    }
+
+    fn build<F>(
+        self,
+        config: ConfigMap,
+        cb: ContextBuilder,
+    ) -> anyhow::Result<(F, ConfigMap, ContextBuilder)>
+    where
+        L: Layer<
+            anyhow::Result<(FilterIdentity, ConfigMap, ContextBuilder)>,
+            Service = anyhow::Result<(F, ConfigMap, ContextBuilder)>,
+        >,
+    {
+        self.layer.layer(Ok((FilterIdentity, config, cb)))
     }
 }
 
@@ -501,9 +403,32 @@ impl<T> PluginCreator<T> {
             let cb = cb.register(plugin.clone());
             return Ok((plugin, cb));
         }
-        panic!("Plugin not found");
+        panic!("Plugin {} not found", std::any::type_name::<T>());
     }
 }
+
+#[derive(Clone, Copy)]
+pub struct FilterIdentity;
+
+impl<Request: Send + 'static> AsyncService<Request> for FilterIdentity {
+    type Response = Option<Request>;
+    type Error = anyhow::Error;
+
+    async fn serve(&self, req: Request) -> anyhow::Result<Self::Response> {
+        Ok(Some(req))
+    }
+}
+
+pub struct StatePipeline<F, RS, R> {
+    filter: F,
+    raw_sink: RS,
+    config: ConfigMap,
+    cb: ContextBuilder,
+    resolver: R,
+    _unlink_guard: kaze_edge::UnlinkGuard,
+    _log_guard: Option<WorkerGuard>,
+}
+
 #[cfg(test)]
 mod tests {
     use kaze_plugin::Context;
@@ -512,37 +437,63 @@ mod tests {
 
     use super::*;
 
+    fn new_pipeline_builder() -> StateFilter<Identity> {
+        let cfg = ConfigBuilder::new(Options::command());
+        StateFilter::new(cfg)
+    }
+
     #[test]
     fn test_pipeline_builder_new() {
-        let builder = PipelineBuilder::new();
-        builder.cfg.debug_assert();
+        let builder = new_pipeline_builder();
+        builder.config_builder.debug_assert();
     }
 
     #[test]
     fn test_pipeline_builder_add() {
-        let builder = PipelineBuilder::new()
+        let builder = new_pipeline_builder()
             .add::<log::Options>("log")
             .add::<ratelimit::Options>("rate_limit")
             .add::<prometheus::Options>("prometheus");
-        builder.cfg.debug_assert();
+        builder.config_builder.debug_assert();
     }
 
     #[test]
     fn test_pipeline_builder_build() {
-        let cb = Context::builder();
-
-        let builder = PipelineBuilder::new()
+        let builder = new_pipeline_builder()
             .add::<log::Options>("log")
             .add::<ratelimit::Options>("rate_limit")
             .add::<prometheus::Options>("prometheus");
 
-        let result = builder.build(cb);
-        assert!(result.is_ok());
+        let (config, filter_builder) = builder.build_config().unwrap();
+        assert!(config.get::<log::Options>().is_some());
+        assert!(config.get::<ratelimit::Options>().is_some());
+        assert!(config.get::<prometheus::Options>().is_some());
+        let filter = filter_builder.build(config, Context::builder());
+        assert!(filter.is_ok());
     }
 
     #[test]
     fn test_plugin_creator_new() {
         let creator = PluginCreator::<prometheus::Options>::new();
         assert_eq!(std::mem::size_of_val(&creator._marker), 0);
+    }
+
+    #[test]
+    fn test_build_sidecar() {
+        // Create a shutdown handle requires tokio runtime
+        let shutdown = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(async { Shutdown::default() });
+
+        let sidecar = SidecarBuilder::new(shutdown)
+            .add::<log::Options>("log")
+            .add::<ratelimit::Options>("rate_limit")
+            .add::<prometheus::Options>("prometheus")
+            .debug_assert()
+            .build_filter()
+            .unwrap()
+            .build_sidecar();
+        assert!(sidecar.is_ok());
     }
 }

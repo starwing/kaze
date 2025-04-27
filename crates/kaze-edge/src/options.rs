@@ -75,6 +75,5 @@ fn default_name() -> String {
 }
 
 pub fn default_bufsize() -> usize {
-    println!("default sq_bufsize: {}", page_size::get() * 8);
     page_size::get() * 8
 }
