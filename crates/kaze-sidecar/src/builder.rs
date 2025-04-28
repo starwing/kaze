@@ -19,7 +19,7 @@ use kaze_plugin::{
     serde::{Deserialize, Serialize},
     service::{AsyncService, FilterChain, ServiceExt as _},
     tokio_graceful::Shutdown,
-    Context, ContextBuilder, PipelineService, PluginFactory,
+    Context, ContextBuilder, PluginFactory,
 };
 use kaze_resolver::{Resolver, ResolverExt as _};
 
@@ -29,6 +29,24 @@ use crate::{
     sidecar::{Sidecar, VERSION},
     Options,
 };
+
+pub trait SinkService:
+    AsyncService<Message, Response = Option<()>, Error = anyhow::Error>
+    + Clone
+    + Sync
+    + Send
+    + 'static
+{
+}
+
+impl<T> SinkService for T where
+    T: AsyncService<Message, Response = Option<()>, Error = anyhow::Error>
+        + Clone
+        + Send
+        + Sync
+        + 'static
+{
+}
 
 pub struct SidecarBuilder<State> {
     state: State,
@@ -83,28 +101,22 @@ impl<L> SidecarBuilder<StateFilter<L>> {
         self.state = self.state.debug_assert();
         self
     }
+}
 
-    pub fn build_filter<F>(
+impl<L, F> SidecarBuilder<StateFilter<L>>
+where
+    L: Layer<
+        anyhow::Result<(FilterIdentity, ConfigMap, ContextBuilder)>,
+        Service = anyhow::Result<(F, ConfigMap, ContextBuilder)>,
+    >,
+{
+    pub fn build_filter(
         self,
     ) -> anyhow::Result<
         SidecarBuilder<
-            StatePipeline<
-                F,
-                impl AsyncService<
-                        Message,
-                        Response = Option<()>,
-                        Error = anyhow::Error,
-                    > + Clone,
-                impl Resolver + Clone,
-            >,
+            StatePipeline<F, impl SinkService, impl Resolver + Clone>,
         >,
-    >
-    where
-        L: Layer<
-            anyhow::Result<(FilterIdentity, ConfigMap, ContextBuilder)>,
-            Service = anyhow::Result<(F, ConfigMap, ContextBuilder)>,
-        >,
-    {
+    > {
         let (mut config, filter_builder) = self.state.build_config()?;
 
         // make up the log guard
@@ -204,51 +216,33 @@ impl<L> SidecarBuilder<StateFilter<L>> {
     }
 }
 
+pub struct StatePipeline<F, RS, R> {
+    filter: F,
+    raw_sink: RS,
+    config: ConfigMap,
+    cb: ContextBuilder,
+    resolver: R,
+    _unlink_guard: kaze_edge::UnlinkGuard,
+    _log_guard: Option<WorkerGuard>,
+}
+
 impl<F, RS, R> SidecarBuilder<StatePipeline<F, RS, R>> {
     pub fn build_sidecar<FS>(self) -> anyhow::Result<Sidecar>
     where
         F: Layer<RS, Service = FS>,
-        FS: AsyncService<Message, Response = Option<()>, Error = anyhow::Error>
-            + Sync
-            + Send
-            + Clone
-            + 'static,
         RS: AsyncService<Message>,
+        FS: SinkService,
         R: Resolver + Clone,
     {
-        let sink = construct_service(
-            self.state.filter,
-            self.state.resolver,
-            self.state.raw_sink,
-        );
+        let sink = ServiceBuilder::new()
+            .layer(ToMessageService.into_layer())
+            .layer(self.state.resolver.into_service().into_filter())
+            .layer(self.state.filter)
+            .service(self.state.raw_sink)
+            .map_response(|_| ());
 
-        fn construct_service<F, FS, RS>(
-            filter: F,
-            resolver: impl Resolver + Clone,
-            raw_sink: RS,
-        ) -> PipelineService
-        where
-            F: Layer<RS, Service = FS>,
-            RS: AsyncService<Message>,
-            FS: AsyncService<
-                    Message,
-                    Response = Option<()>,
-                    Error = anyhow::Error,
-                > + Sync
-                + Send
-                + Clone
-                + 'static,
-        {
-            let sink = ServiceBuilder::new()
-                .layer(ToMessageService.into_layer())
-                .layer(resolver.into_service().into_filter())
-                .layer(filter)
-                .service(raw_sink)
-                .map_response(|_| ());
-
-            // construct the context
-            BoxCloneSyncService::new(sink.into_tower())
-        }
+        // construct the context
+        let sink = BoxCloneSyncService::new(sink.into_tower());
 
         let ctx = self.state.cb.build(self.shutdown.guard());
         ctx.sink().set(sink);
@@ -417,16 +411,6 @@ impl<Request: Send + 'static> AsyncService<Request> for FilterIdentity {
     async fn serve(&self, req: Request) -> anyhow::Result<Self::Response> {
         Ok(Some(req))
     }
-}
-
-pub struct StatePipeline<F, RS, R> {
-    filter: F,
-    raw_sink: RS,
-    config: ConfigMap,
-    cb: ContextBuilder,
-    resolver: R,
-    _unlink_guard: kaze_edge::UnlinkGuard,
-    _log_guard: Option<WorkerGuard>,
 }
 
 #[cfg(test)]

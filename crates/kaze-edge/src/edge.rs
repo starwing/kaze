@@ -6,7 +6,9 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use kaze_core::bytes::BufMut;
-use kaze_plugin::{Plugin, service::AsyncService};
+use kaze_plugin::{
+    Plugin, service::AsyncService, util::tower_ext::ServiceExt as _,
+};
 use kaze_protocol::packet::Packet;
 use metrics::counter;
 use tokio::{sync::Mutex, task::block_in_place};
@@ -147,8 +149,27 @@ impl Plugin for Receiver {
     fn init(&self, ctx: kaze_plugin::Context) {
         self.ctx.set(ctx).unwrap();
     }
+
     fn context(&self) -> &kaze_plugin::Context {
         self.ctx.get().unwrap()
+    }
+
+    fn run(
+        &self,
+    ) -> Option<
+        std::pin::Pin<
+            Box<dyn Future<Output = anyhow::Result<()>> + Send + 'static>,
+        >,
+    > {
+        let mut rx = self.clone();
+        Some(Box::pin(async move {
+            let mut sink = rx.context().sink().clone();
+            loop {
+                let packet =
+                    rx.read_packet().await.context("failed to read packet")?;
+                sink.ready_call((packet, None)).await?;
+            }
+        }))
     }
 }
 

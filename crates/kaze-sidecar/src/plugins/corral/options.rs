@@ -7,7 +7,7 @@ use kaze_plugin::{
     PluginFactory,
 };
 
-use super::corral::Corral;
+use super::Corral;
 
 /// corral configurations
 #[derive(Args, Serialize, Deserialize, Clone, Debug)]

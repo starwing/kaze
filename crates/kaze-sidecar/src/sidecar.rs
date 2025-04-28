@@ -18,15 +18,11 @@ use kaze_plugin::protocol::service::{SinkMessage, ToMessageService};
 use kaze_plugin::serde::{Deserialize, Serialize};
 use kaze_plugin::service::ServiceExt;
 use kaze_plugin::tokio_graceful::Shutdown;
-use kaze_plugin::util::tower_ext::ServiceExt as _;
-use kaze_plugin::{Context, PipelineService, PluginFactory};
+use kaze_plugin::{Context, PipelineService, Plugin, PluginFactory};
 use kaze_resolver::ResolverExt;
 
 use crate::config::{ConfigBuilder, ConfigFileBuilder, ConfigMap};
-use crate::plugins::corral::Corral;
-use crate::plugins::log::LogService;
-use crate::plugins::tracker::RpcTracker;
-use crate::plugins::{consul, corral, log, prometheus, ratelimit};
+use crate::plugins::{consul, corral, log, prometheus, ratelimit, tracker};
 
 /// the kaze sidecar for host
 #[derive(Parser, Serialize, Deserialize, Clone, Debug)]
@@ -96,8 +92,8 @@ impl Options {
         let ratelimit =
             config.take::<ratelimit::Options>().unwrap().build()?;
         let corral = config.take::<corral::Options>().unwrap().build()?;
-        let tracker = RpcTracker::new(10);
-        let logger = LogService;
+        let tracker = tracker::RpcTracker::new(10);
+        let logger = log::LogService;
 
         let sink = ServiceBuilder::new()
             .layer(ToMessageService.into_layer())
@@ -198,22 +194,16 @@ impl Sidecar {
     /// run the sidecar
     pub async fn run(self) -> anyhow::Result<()> {
         let (r1, r2) = join!(
-            self.handle_receiver(),
-            self.ctx.get::<Corral>().unwrap().handle_listener()
+            self.ctx
+                .get::<kaze_edge::Receiver>()
+                .unwrap()
+                .run()
+                .unwrap(),
+            self.ctx.get::<corral::Corral>().unwrap().run().unwrap(),
         );
         r1?;
         r2?;
         Ok(())
-    }
-
-    async fn handle_receiver(&self) -> anyhow::Result<()> {
-        let mut sink = self.ctx.sink().clone();
-        let mut rx = self.ctx.get::<kaze_edge::Receiver>().unwrap().clone();
-        loop {
-            let packet =
-                rx.read_packet().await.context("failed to read packet")?;
-            sink.ready_call((packet, None)).await?;
-        }
     }
 }
 
