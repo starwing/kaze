@@ -5,8 +5,7 @@ use anyhow::Context as _;
 use kaze_plugin::clap::{
     crate_version, CommandFactory, FromArgMatches, Parser,
 };
-use tokio::join;
-use tokio_util::task::TaskTracker;
+use tokio::task::JoinSet;
 use tower::util::BoxCloneSyncService;
 use tower::ServiceBuilder;
 use tracing::level_filters::LevelFilter;
@@ -18,7 +17,7 @@ use kaze_plugin::protocol::service::{SinkMessage, ToMessageService};
 use kaze_plugin::serde::{Deserialize, Serialize};
 use kaze_plugin::service::ServiceExt;
 use kaze_plugin::tokio_graceful::Shutdown;
-use kaze_plugin::{Context, PipelineService, Plugin, PluginFactory};
+use kaze_plugin::{Context, PipelineService, PluginFactory};
 use kaze_resolver::ResolverExt;
 
 use crate::config::{ConfigBuilder, ConfigFileBuilder, ConfigMap};
@@ -124,7 +123,6 @@ impl Options {
             ctx,
             options,
             _shutdown: shutdown,
-            _tracker: TaskTracker::new(),
             _unlink_guard,
             _log_guard: _guard,
         })
@@ -164,7 +162,6 @@ pub struct Sidecar {
     ctx: Context,
     options: Options,
     _shutdown: Shutdown,
-    _tracker: TaskTracker,
     _unlink_guard: kaze_edge::UnlinkGuard,
     _log_guard: Option<WorkerGuard>,
 }
@@ -181,7 +178,6 @@ impl Sidecar {
             ctx,
             options,
             _shutdown,
-            _tracker: TaskTracker::new(),
             _unlink_guard,
             _log_guard,
         }
@@ -193,16 +189,23 @@ impl Sidecar {
 
     /// run the sidecar
     pub async fn run(self) -> anyhow::Result<()> {
-        let (r1, r2) = join!(
-            self.ctx
-                .get::<kaze_edge::Receiver>()
-                .unwrap()
-                .run()
-                .unwrap(),
-            self.ctx.get::<corral::Corral>().unwrap().run().unwrap(),
-        );
-        r1?;
-        r2?;
+        let mut set = JoinSet::new();
+        for plugin in self.ctx.components() {
+            if let Some(fut) = plugin.run() {
+                set.spawn(fut);
+            }
+        }
+        while let Some(res) = set.join_next().await {
+            match res {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    return Err(e).context("plugin error");
+                }
+                Err(e) => {
+                    return Err(anyhow::Error::new(e)).context("plugin panic");
+                }
+            }
+        }
         Ok(())
     }
 }

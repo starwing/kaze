@@ -3,31 +3,33 @@ mod context;
 mod local;
 mod wrapper;
 
-use std::{any::Any, pin::Pin, sync::Arc};
-
-use tower::util::BoxCloneSyncService;
+use std::{any::Any, sync::Arc};
 
 use kaze_protocol::message::PacketWithAddr;
 use kaze_util::tower_ext::CellService;
+use tower::util::BoxCloneSyncService;
 
 pub use anyhow;
 pub use clap;
 pub use serde;
 pub use tokio_graceful;
 
-pub use kaze_protocol as protocol;
-pub use kaze_service as service;
-pub use kaze_util as util;
-
 pub use clap_default::ClapDefault;
 pub use context::*;
 pub use local::*;
 pub use wrapper::*;
 
+pub use kaze_protocol as protocol;
+pub use kaze_service as service;
+pub use kaze_util as util;
+
 pub type PipelineService =
     BoxCloneSyncService<PacketWithAddr, (), anyhow::Error>;
 
 pub type PipelineCell = CellService<PipelineService>;
+
+pub type PluginRunFuture =
+    futures::future::BoxFuture<'static, anyhow::Result<()>>;
 
 /// a trait that inits the plugin, and provides a context to the plugin.
 pub trait Plugin: AnyClone + Send + Sync + 'static {
@@ -37,11 +39,7 @@ pub trait Plugin: AnyClone + Send + Sync + 'static {
         unimplemented!("context() is not implemented for Plugin");
     }
 
-    fn run(
-        &self,
-    ) -> Option<
-        Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'static>>,
-    > {
+    fn run(&self) -> Option<PluginRunFuture> {
         None
     }
 }

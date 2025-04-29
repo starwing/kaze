@@ -106,6 +106,11 @@ impl Context {
             .and_then(|boxed| boxed.as_any().downcast_ref())
     }
 
+    /// Get a list of all components registered in this `Extensions`.
+    pub fn components(&self) -> impl IntoIterator<Item = &dyn Plugin> {
+        self.inner.components.values().map(|v| v.as_ref())
+    }
+
     /// Get an exclusive reference to a type previously inserted on this `Extensions`.
     pub fn get_mut<T: Send + Sync + 'static>(&mut self) -> Option<&mut T> {
         Arc::get_mut(&mut self.inner).and_then(|inner| {

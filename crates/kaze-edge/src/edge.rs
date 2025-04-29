@@ -154,13 +154,7 @@ impl Plugin for Receiver {
         self.ctx.get().unwrap()
     }
 
-    fn run(
-        &self,
-    ) -> Option<
-        std::pin::Pin<
-            Box<dyn Future<Output = anyhow::Result<()>> + Send + 'static>,
-        >,
-    > {
+    fn run(&self) -> Option<kaze_plugin::PluginRunFuture> {
         let mut rx = self.clone();
         Some(Box::pin(async move {
             let mut sink = rx.context().sink().clone();

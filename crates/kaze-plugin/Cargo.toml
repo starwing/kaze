@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+futures.workspace = true
 papaya.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
