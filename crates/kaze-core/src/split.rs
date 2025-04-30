@@ -111,6 +111,11 @@ impl OwnedReadHalf {
         self.channel.shutdown_guard(Mode::READ)
     }
 
+    /// Shutdown the read part
+    pub fn shutdown(&self) -> crate::Result<()> {
+        self.channel.shutdown(Mode::BOTH)
+    }
+
     /// Read data from the channel
     pub fn read(&self, write: impl BufMut) -> crate::Result<usize> {
         self.channel.read_util(write, -1)

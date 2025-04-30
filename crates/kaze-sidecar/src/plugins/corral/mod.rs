@@ -24,7 +24,7 @@ use tokio::{
 };
 use tokio_stream::StreamExt;
 use tokio_util::codec::FramedRead;
-use tracing::{error, instrument};
+use tracing::{error, info, instrument};
 
 use kaze_plugin::{
     protocol::{codec::NetPacketCodec, packet::BytesPool},
@@ -70,6 +70,7 @@ impl Plugin for Corral {
         Some(Box::pin(async move {
             let listener =
                 TcpListener::bind(&corral.inner.options.listen).await?;
+            info!(addr = %corral.inner.options.listen, "Corral listening");
             loop {
                 let (conn, addr) = select! {
                     r = listener.accept() => r?,
@@ -77,7 +78,9 @@ impl Plugin for Corral {
                 };
                 corral.add_connection(conn, addr).await?;
             }
+            info!("Corral exiting");
             corral.graceful_exit().await?;
+            info!("Corral exited");
             Ok(())
         }))
     }
@@ -298,7 +301,6 @@ impl ConnSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kaze_plugin::tokio_graceful::Shutdown;
     use kaze_plugin::PluginFactory as _;
     use std::net::SocketAddr;
     use std::str::FromStr;
@@ -314,9 +316,7 @@ mod tests {
         }
         .build()
         .unwrap();
-        Context::builder()
-            .register(corral.clone())
-            .build(Shutdown::default().guard());
+        Context::builder().register(corral.clone()).build();
         corral
     }
 
@@ -363,9 +363,7 @@ mod tests {
         .unwrap();
 
         // Mock context initialization
-        Context::builder()
-            .register(corral.clone())
-            .build(Shutdown::default().guard());
+        Context::builder().register(corral.clone()).build();
 
         // Create a server
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

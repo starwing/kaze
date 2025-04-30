@@ -6,12 +6,13 @@ use anyhow::Result;
 use futures::StreamExt;
 use metrics::counter;
 use papaya::HashMap;
+use parking_lot::Mutex;
 use thingbuf::mpsc::{Receiver, Sender};
 use thingbuf::Recycle;
 use tokio::select;
 use tokio_util::time::delay_queue::Expired;
 use tokio_util::time::{delay_queue::Key, DelayQueue};
-use tracing::error;
+use tracing::{error, info};
 
 use kaze_plugin::{
     local_node,
@@ -39,6 +40,7 @@ struct Inner {
     rpc_map: HashMap<u32, Info>,
     seq: AtomicU32,
     tx: Sender<Action, ActionRecycler>,
+    rx: Mutex<Option<Receiver<Action, ActionRecycler>>>,
     ctx: OnceLock<Context>,
 }
 
@@ -68,6 +70,15 @@ impl Plugin for RpcTracker {
     fn context(&self) -> &Context {
         self.inner.ctx.get().unwrap()
     }
+    fn run(&self) -> Option<kaze_plugin::PluginRunFuture> {
+        let rx = self.inner.rx.lock().take().unwrap();
+        let tracker = self.clone();
+        Some(Box::pin(async move {
+            tracker.main_loop(rx).await;
+            info!("RpcTracker exiting");
+            Ok(())
+        }))
+    }
 }
 
 impl RpcTracker {
@@ -79,13 +90,13 @@ impl RpcTracker {
                 rpc_map: HashMap::new(),
                 seq: AtomicU32::new(114514),
                 tx,
+                rx: Mutex::new(Some(rx)),
             }),
         };
-        tokio::spawn(obj.clone().run(rx));
         obj
     }
 
-    async fn run(self, rx: Receiver<Action, ActionRecycler>) {
+    async fn main_loop(self, rx: Receiver<Action, ActionRecycler>) {
         let mut queue = DelayQueue::new();
         loop {
             let action = if queue.is_empty() {
@@ -98,7 +109,6 @@ impl RpcTracker {
                     insert = rx.recv() => insert,
                     expired = queue.next() =>
                         expired.map(|e| Action::Expired(e)),
-                    _ = self.context().exiting() => break,
                 }
             };
             match action {
@@ -222,7 +232,6 @@ mod tests {
     use kaze_plugin::{
         protocol::message::{Destination, PacketWithAddr, Source},
         service::{async_service_fn, ServiceExt},
-        tokio_graceful::Shutdown,
     };
 
     #[tokio::test]
@@ -242,9 +251,7 @@ mod tests {
         .into_tower();
         let sink = BoxCloneSyncService::new(sink);
         let tracker = RpcTracker::new(10);
-        let ctx = Context::builder()
-            .register(tracker.clone())
-            .build(Shutdown::default().guard());
+        let ctx = Context::builder().register(tracker.clone()).build();
         ctx.raw_sink().set(sink);
         let msg = Message::new_with_destination(
             Packet::from_hdr(Hdr {

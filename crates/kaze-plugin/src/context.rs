@@ -1,11 +1,12 @@
 use std::{
     any::TypeId,
     collections::HashMap,
+    future::pending,
     hash::{BuildHasherDefault, Hasher},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
-use tokio_graceful::ShutdownGuard;
+use tokio_graceful::{Shutdown, ShutdownGuard};
 
 use kaze_protocol::{
     message::PacketWithAddr,
@@ -28,8 +29,8 @@ impl ContextBuilder {
         self
     }
 
-    pub fn build(self, guard: ShutdownGuard) -> Context {
-        let ctx = Context::new(self.components, guard.clone());
+    pub fn build(self) -> Context {
+        let ctx = Context::new(self.components);
         for component in ctx.inner.components.values() {
             component.init(ctx.clone());
         }
@@ -47,7 +48,7 @@ struct Inner {
     raw_sink: PipelineCell,
     pool: BytesPool,
     components: AnyMap,
-    guard: ShutdownGuard,
+    shutdown_guard: OnceLock<ShutdownGuard>,
 }
 
 impl std::fmt::Debug for Context {
@@ -57,14 +58,14 @@ impl std::fmt::Debug for Context {
 }
 
 impl Context {
-    fn new(components: AnyMap, guard: ShutdownGuard) -> Self {
+    fn new(components: AnyMap) -> Self {
         Self {
             inner: Arc::new(Inner {
                 sink: PipelineCell::new(),
                 raw_sink: PipelineCell::new(),
                 pool: new_bytes_pool(),
+                shutdown_guard: OnceLock::new(),
                 components,
-                guard,
             }),
         }
     }
@@ -73,6 +74,23 @@ impl Context {
         ContextBuilder {
             components: AnyMap::default(),
         }
+    }
+
+    pub fn set_shutdown_guard(
+        &self,
+        shutdown_guard: ShutdownGuard,
+    ) -> Result<(), ShutdownGuard> {
+        self.inner.shutdown_guard.set(shutdown_guard)
+    }
+
+    /// Get an exclusive reference to a type previously inserted on this `Extensions`.
+    pub fn get_mut<T: Send + Sync + 'static>(&mut self) -> Option<&mut T> {
+        Arc::get_mut(&mut self.inner).and_then(|inner| {
+            inner
+                .components
+                .get_mut(&TypeId::of::<T>())
+                .and_then(|boxed| (**boxed).as_any_mut().downcast_mut())
+        })
     }
 
     pub fn sink(&self) -> &PipelineCell {
@@ -89,8 +107,8 @@ impl Context {
 
     /// Get a reference to the shutdown guard,
     /// if and only if the executor was created with [`Self::graceful`].
-    pub fn guard(&self) -> &ShutdownGuard {
-        &self.inner.guard
+    pub fn shutdown_guard(&self) -> Option<&ShutdownGuard> {
+        self.inner.shutdown_guard.get()
     }
 
     /// Returns true if the `Extensions` contains the given type.
@@ -111,18 +129,12 @@ impl Context {
         self.inner.components.values().map(|v| v.as_ref())
     }
 
-    /// Get an exclusive reference to a type previously inserted on this `Extensions`.
-    pub fn get_mut<T: Send + Sync + 'static>(&mut self) -> Option<&mut T> {
-        Arc::get_mut(&mut self.inner).and_then(|inner| {
-            inner
-                .components
-                .get_mut(&TypeId::of::<T>())
-                .and_then(|boxed| (**boxed).as_any_mut().downcast_mut())
-        })
-    }
-
     pub async fn exiting(&self) {
-        self.inner.guard.cancelled().await
+        if let Some(guard) = self.shutdown_guard() {
+            guard.cancelled().await;
+        } else {
+            pending::<()>().await;
+        }
     }
 
     /// Spawn a future on the current executor,
@@ -135,7 +147,10 @@ impl Context {
         T: Future + Send + 'static,
         T::Output: Send + 'static,
     {
-        self.guard().spawn_task(future)
+        if let Some(guard) = self.shutdown_guard() {
+            return guard.spawn_task(future);
+        }
+        tokio::spawn(future)
     }
 
     pub fn spawn_task_fn<F, T>(
@@ -147,7 +162,12 @@ impl Context {
         T: Future + Send + 'static,
         T::Output: Send + 'static,
     {
-        self.guard().spawn_task_fn(future)
+        if let Some(guard) = self.shutdown_guard() {
+            return guard.spawn_task_fn(future);
+        }
+        // TODO: any better way to do this?
+        let shutdown = Shutdown::default();
+        tokio::spawn(future(shutdown.guard()))
     }
 
     /// Send message to the pipeline
@@ -196,8 +216,6 @@ mod tests {
     use std::pin::Pin;
     use std::task::{Context as TaskContext, Poll};
 
-    use tokio_graceful::Shutdown;
-
     use crate::{Context, Plugin};
 
     #[derive(Clone)]
@@ -233,14 +251,14 @@ mod tests {
             .register(TestComponent {
                 value: "test".to_string(),
             })
-            .build(Shutdown::default().guard());
+            .build();
         let retrieved = context.get::<TestComponent>().unwrap();
         assert_eq!(retrieved.value, "test");
     }
 
     #[tokio::test]
     async fn test_get_nonexistent_component() {
-        let context = Context::builder().build(Shutdown::default().guard());
+        let context = Context::builder().build();
 
         let retrieved = context.get::<TestComponent>();
         assert!(retrieved.is_none());
@@ -248,7 +266,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_task() {
-        let context = Context::builder().build(Shutdown::default().guard());
+        let context = Context::builder().build();
 
         let handle = context.spawn_task(async { 42 });
 
@@ -257,16 +275,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_task_fn() {
-        let context = Context::builder().build(Shutdown::default().guard());
+        let context = Context::builder().build();
         let handle = context.spawn_task_fn(|_guard| async { 42 });
         assert_eq!(handle.await.unwrap(), 42);
     }
 
     #[tokio::test]
     async fn test_guard_reference() {
-        let context = Context::builder().build(Shutdown::default().guard());
+        let context = Context::builder().build();
 
-        let handle = context.guard().spawn_task_fn(|_guard| async { 42 });
+        let handle = context.spawn_task_fn(|_guard| async { 42 });
         assert_eq!(handle.await.unwrap(), 42);
     }
 }

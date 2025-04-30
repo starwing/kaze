@@ -18,7 +18,6 @@ use kaze_plugin::{
     },
     serde::{Deserialize, Serialize},
     service::{AsyncService, FilterChain, ServiceExt as _},
-    tokio_graceful::Shutdown,
     Context, ContextBuilder, PluginFactory,
 };
 use kaze_resolver::{Resolver, ResolverExt as _};
@@ -26,8 +25,8 @@ use kaze_resolver::{Resolver, ResolverExt as _};
 use crate::{
     config::{ConfigBuilder, ConfigFileBuilder, ConfigMap},
     plugins::{corral, log},
+    sidecar::Options,
     sidecar::{Sidecar, VERSION},
-    Options,
 };
 
 pub trait SinkService:
@@ -50,12 +49,11 @@ impl<T> SinkService for T where
 
 pub struct SidecarBuilder<State> {
     state: State,
-    shutdown: Shutdown,
     temp_log: DefaultGuard,
 }
 
 impl SidecarBuilder<StateFilter<Identity>> {
-    pub fn new(shutdown: Shutdown) -> Self {
+    pub fn new() -> Self {
         // init intial log
         let temp_log = tracing_subscriber::registry()
             .with(tracing_subscriber::fmt::layer())
@@ -65,7 +63,6 @@ impl SidecarBuilder<StateFilter<Identity>> {
         let cfg = Self::new_config_builder(Options::command());
         Self {
             state: StateFilter::new(cfg),
-            shutdown,
             temp_log,
         }
     }
@@ -93,7 +90,6 @@ impl<L> SidecarBuilder<StateFilter<L>> {
         SidecarBuilder {
             state: self.state.add(name),
             temp_log: self.temp_log,
-            shutdown: self.shutdown,
         }
     }
 
@@ -110,7 +106,7 @@ where
         Service = anyhow::Result<(F, ConfigMap, ContextBuilder)>,
     >,
 {
-    pub fn build_filter(
+    pub fn build_pipeline(
         self,
     ) -> anyhow::Result<
         SidecarBuilder<
@@ -176,7 +172,6 @@ where
                 _unlink_guard,
                 _log_guard,
             },
-            shutdown: self.shutdown,
             temp_log: self.temp_log,
         })
     }
@@ -199,6 +194,7 @@ where
             .with(tracing_subscriber::fmt::layer())
             .with(
                 tracing_subscriber::fmt::layer()
+                    .pretty()
                     .with_ansi(false)
                     .with_writer(non_block),
             )
@@ -244,7 +240,7 @@ impl<F, RS, R> SidecarBuilder<StatePipeline<F, RS, R>> {
         // construct the context
         let sink = BoxCloneSyncService::new(sink.into_tower());
 
-        let ctx = self.state.cb.build(self.shutdown.guard());
+        let ctx = self.state.cb.build();
         ctx.sink().set(sink);
 
         let mut config = self.state.config;
@@ -252,7 +248,6 @@ impl<F, RS, R> SidecarBuilder<StatePipeline<F, RS, R>> {
         Ok(Sidecar::new(
             ctx,
             options,
-            self.shutdown,
             self.state._unlink_guard,
             self.state._log_guard,
         ))
@@ -464,18 +459,12 @@ mod tests {
 
     #[test]
     fn test_build_sidecar() {
-        // Create a shutdown handle requires tokio runtime
-        let shutdown = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap()
-            .block_on(async { Shutdown::default() });
-
-        let sidecar = SidecarBuilder::new(shutdown)
+        let sidecar = SidecarBuilder::new()
             .add::<log::Options>("log")
             .add::<ratelimit::Options>("rate_limit")
             .add::<prometheus::Options>("prometheus")
             .debug_assert()
-            .build_filter()
+            .build_pipeline()
             .unwrap()
             .build_sidecar();
         assert!(sidecar.is_ok());

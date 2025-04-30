@@ -253,7 +253,7 @@ impl Channel {
         millis: i32,
     ) -> Result<usize> {
         let mut ctx = self.read_context()?;
-        ctx.wait_util(millis)?;
+        ctx = ctx.wait_util(millis)?;
         Ok(ctx.read(&mut write)?)
     }
 
@@ -266,7 +266,7 @@ impl Channel {
     pub fn write_util(&self, data: impl Buf, millis: i32) -> Result<()> {
         let len = data.remaining();
         let mut ctx = self.write_context(len)?;
-        ctx.wait_util(millis)?;
+        ctx = ctx.wait_util(millis)?;
         ctx.write(data)?;
         Ok(())
     }
@@ -347,15 +347,26 @@ impl Context<'_> {
         self.raw.result == ffi::KZ_AGAIN
     }
 
+    /// Make a static context from this context, used by waiting on another
+    /// thread.
+    ///
+    /// SAFETY: You must ensure that only one thread is using this context at a time.
+    pub unsafe fn into_static(self) -> Context<'static> {
+        Context {
+            raw: self.raw,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
     /// Wait until the channel is ready for read/write.
-    pub fn wait(&mut self) -> Result<()> {
+    pub fn wait(self) -> Result<Self> {
         self.wait_util(-1)
     }
 
     /// Wait until the channel is ready for read/write with timeout.
-    pub fn wait_util(&mut self, millis: i32) -> Result<()> {
+    pub fn wait_util(mut self, millis: i32) -> Result<Self> {
         let r = unsafe { ffi::kz_waitcontext(&mut self.raw, millis) };
-        Error::get_result(r, ())
+        Error::get_result(r, self)
     }
 
     /// Cancel the read/write operation of this context

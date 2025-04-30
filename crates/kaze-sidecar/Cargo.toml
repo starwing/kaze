@@ -19,6 +19,7 @@ metrics-exporter-prometheus = { workspace = true, features = [
 ] }
 metrics.workspace = true
 papaya.workspace = true
+parking_lot.workspace = true
 thingbuf.workspace = true
 tokio-stream.workspace = true
 tokio-util = { workspace = true, features = ["rt"] }

@@ -30,6 +30,7 @@ pub struct Options {
 
     /// Unlink shared memory object if it exists
     #[arg(short, long, action = clap::ArgAction::SetTrue)]
+    #[arg(default_value_t = default_unlink())]
     #[serde(skip)]
     pub unlink: bool,
 }
@@ -72,6 +73,10 @@ impl Options {
 
 fn default_name() -> String {
     "kaze".to_string()
+}
+
+fn default_unlink() -> bool {
+    true
 }
 
 pub fn default_bufsize() -> usize {

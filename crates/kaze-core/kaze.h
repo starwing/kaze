@@ -696,12 +696,16 @@ KZ_API int kz_shutdown(kz_State *S, int mode) {
         kzQ_setneed(&S->read, 0);
         if (kzA_loadrelaxed(&S->read.info->writing))
             waked = 1, kz_futex_wake(&S->read.info->need, 1);
+        if (kzA_loadrelaxed(&S->read.info->reading))
+            kz_futex_wake(&S->read.info->used, 1);
     }
     if ((mode & KZ_WRITE)) {
         kzA_storerelaxed(&S->write.info->used, KZ_MARK);
         kzQ_setneed(&S->write, 0);
         if (kzA_loadrelaxed(&S->write.info->reading))
             waked = 1, kz_futex_wake(&S->write.info->used, 1);
+        if (kzA_loadrelaxed(&S->write.info->writing))
+            kz_futex_wake(&S->write.info->need, 1);
     }
     if (mode != 0 && (int32_t)kzA_loadrelaxed(&S->read.info->mux) > 0) {
 #ifdef __linux__

@@ -11,7 +11,7 @@ use kaze_plugin::{
 };
 use kaze_protocol::packet::Packet;
 use metrics::counter;
-use tokio::{sync::Mutex, task::block_in_place};
+use tokio::{select, sync::Mutex, task::spawn_blocking};
 use tracing::{info, warn};
 
 use kaze_core::{Channel, OwnedReadHalf, OwnedWriteHalf};
@@ -109,6 +109,10 @@ impl Receiver {
         }
     }
 
+    pub fn shutdown(&self) -> anyhow::Result<()> {
+        self.rx.shutdown().map_err(Into::into)
+    }
+
     pub async fn read_packet(&mut self) -> Result<Packet> {
         let mut ctx = self
             .rx
@@ -116,7 +120,10 @@ impl Receiver {
             .context("Failed to create read context")?;
         if ctx.would_block() {
             counter!("kaze_completion_blocking_total").increment(1);
-            block_in_place(|| ctx.wait())
+            // SAFETY: we use it only in spawn_blocking.
+            let spawn_ctx = unsafe { ctx.into_static() };
+            ctx = spawn_blocking(move || spawn_ctx.wait())
+                .await?
                 .map_err(|e| {
                     counter!("kaze_completion_blocking_errors_total")
                         .increment(1);
@@ -156,13 +163,18 @@ impl Plugin for Receiver {
 
     fn run(&self) -> Option<kaze_plugin::PluginRunFuture> {
         let mut rx = self.clone();
+        let ctx = self.context().clone();
         Some(Box::pin(async move {
             let mut sink = rx.context().sink().clone();
             loop {
-                let packet =
-                    rx.read_packet().await.context("failed to read packet")?;
+                let packet = select! {
+                    pkt = rx.read_packet() => pkt.context("Failed to read packet")?,
+                    _ = ctx.exiting() => break,
+                };
                 sink.ready_call((packet, None)).await?;
             }
+            info!("Receiver exiting");
+            Ok(())
         }))
     }
 }
@@ -204,7 +216,10 @@ impl Sender {
             .context("Failed to create write context")?;
         if ctx.would_block() {
             counter!("kaze_submission_blocking_total").increment(1);
-            block_in_place(|| ctx.wait())
+            // SAFETY: we use it only in spawn_blocking.
+            let spawn_ctx = unsafe { ctx.into_static() };
+            ctx = spawn_blocking(|| spawn_ctx.wait())
+                .await?
                 .map_err(|e| {
                     counter!("kaze_submission_blocking_errors_total")
                         .increment(1);
@@ -255,7 +270,7 @@ impl Plugin for Sender {
 
 #[cfg(test)]
 mod tests {
-    use kaze_plugin::{service::AsyncService, tokio_graceful::Shutdown};
+    use kaze_plugin::service::AsyncService;
     use kaze_protocol::{
         message::{Destination, Message, Source},
         packet::Packet,
@@ -269,9 +284,7 @@ mod tests {
         let edge = Options::new().with_unlink(true).build().unwrap();
         let _guard = edge.unlink_guard();
         let (tx, _rx) = edge.into_split();
-        kaze_plugin::Context::builder()
-            .register(tx.clone())
-            .build(Shutdown::default().guard());
+        kaze_plugin::Context::builder().register(tx.clone()).build();
         let r = tx
             .serve(Message::new_with_destination(
                 Packet::from_retcode(Hdr::default(), RetCode::RetOk),

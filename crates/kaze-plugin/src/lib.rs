@@ -33,6 +33,10 @@ pub type PluginRunFuture =
 
 /// a trait that inits the plugin, and provides a context to the plugin.
 pub trait Plugin: AnyClone + Send + Sync + 'static {
+    fn name(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
+
     fn init(&self, _ctx: Context) {}
 
     fn context(&self) -> &Context {
