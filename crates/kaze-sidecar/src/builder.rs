@@ -24,9 +24,8 @@ use kaze_resolver::{Resolver, ResolverExt as _};
 
 use crate::{
     config::{ConfigBuilder, ConfigFileBuilder, ConfigMap},
-    plugins::{corral, log},
-    sidecar::Options,
-    sidecar::{Sidecar, VERSION},
+    plugins::{corral, log, tracker},
+    sidecar::{Options, Sidecar, VERSION},
 };
 
 pub trait SinkService:
@@ -69,9 +68,10 @@ impl SidecarBuilder<StateFilter<Identity>> {
 
     fn new_config_builder(cmd: clap::Command) -> ConfigBuilder {
         ConfigBuilder::new(cmd)
-            .add::<kaze_edge::Options>("edge")
-            .add::<corral::Options>("corral")
             .add::<kaze_resolver::LocalOptions>("local")
+            .add::<tracker::Options>("tracker")
+            .add::<corral::Options>("corral")
+            .add::<kaze_edge::Options>("edge")
     }
 }
 
@@ -223,16 +223,27 @@ pub struct StatePipeline<F, RS, R> {
 }
 
 impl<F, RS, R> SidecarBuilder<StatePipeline<F, RS, R>> {
-    pub fn build_sidecar<FS>(self) -> anyhow::Result<Sidecar>
+    pub fn build_sidecar<FS>(mut self) -> anyhow::Result<Sidecar>
     where
         F: Layer<RS, Service = FS>,
         RS: AsyncService<Message>,
         FS: SinkService,
         R: Resolver + Clone,
     {
+        // create the tracker instance
+        let tracker = self
+            .state
+            .config
+            .take::<tracker::Options>()
+            .unwrap()
+            .build()
+            .context("failed to build tracker")?;
+        let ctx_builder = self.state.cb.register(tracker.clone());
+
         let sink = ServiceBuilder::new()
             .layer(ToMessageService.into_layer())
             .layer(self.state.resolver.into_service().into_filter())
+            .layer(tracker.into_filter())
             .layer(self.state.filter)
             .service(self.state.raw_sink)
             .map_response(|_| ());
@@ -240,7 +251,7 @@ impl<F, RS, R> SidecarBuilder<StatePipeline<F, RS, R>> {
         // construct the context
         let sink = BoxCloneSyncService::new(sink.into_tower());
 
-        let ctx = self.state.cb.build();
+        let ctx = ctx_builder.build();
         ctx.sink().set(sink);
 
         let mut config = self.state.config;

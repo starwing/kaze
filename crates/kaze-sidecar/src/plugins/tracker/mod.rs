@@ -1,3 +1,7 @@
+mod options;
+
+pub use options::Options;
+
 use std::sync::OnceLock;
 use std::sync::{atomic::AtomicU32, Arc};
 use std::time::Duration;
@@ -73,9 +77,11 @@ impl Plugin for RpcTracker {
     fn run(&self) -> Option<kaze_plugin::PluginRunFuture> {
         let rx = self.inner.rx.lock().take().unwrap();
         let tracker = self.clone();
+        let ctx = self.context().clone();
         Some(Box::pin(async move {
             tracker.main_loop(rx).await;
             info!("RpcTracker exiting");
+            ctx.trigger_exiting();
             Ok(())
         }))
     }
@@ -102,7 +108,7 @@ impl RpcTracker {
             let action = if queue.is_empty() {
                 select! {
                     insert = rx.recv() => insert,
-                    _ = self.context().exiting() => break,
+                    _ = self.context().shutdwon_triggered() => break,
                 }
             } else {
                 select! {

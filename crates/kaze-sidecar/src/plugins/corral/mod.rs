@@ -253,7 +253,7 @@ impl ConnSource {
         let timeout = self.corral.idle_timeout();
         while let Ok(pkg) = select! {
             pkg = tokio::time::timeout(timeout, self.inner.next()) => pkg,
-            _ = ctx.exiting() => return Ok(()),
+            _ = ctx.shutdwon_triggered() => return Ok(()),
         } {
             let Some(pkg) = pkg else {
                 counter!("kaze_read_closed_total").increment(1);
@@ -277,7 +277,7 @@ impl ConnSource {
         };
         let pkg = select! {
             pkg = tokio::time::timeout(pending, self.inner.next()) => pkg,
-            _ = self.corral.context().exiting() => return Ok(false)
+            _ = self.corral.context().shutdwon_triggered() => return Ok(false)
         };
         if let Err(_) = pkg {
             // timeout

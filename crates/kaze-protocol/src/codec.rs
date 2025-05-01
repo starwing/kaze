@@ -136,7 +136,6 @@ pub fn decode_packet<'a>(mut src: impl Buf) -> Result<proto::Hdr> {
     }
     let hdr_size = src.get_u32_le() as usize;
     if hdr_size > src.remaining() {
-        println!("hdr_size={}, remaining={}", hdr_size, src.remaining());
         bail!(
             "Invalid packet header size={}, remaining={}",
             hdr_size,

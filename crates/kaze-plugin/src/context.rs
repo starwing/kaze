@@ -6,6 +6,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
+use tokio::sync::Notify;
 use tokio_graceful::{Shutdown, ShutdownGuard};
 
 use kaze_protocol::{
@@ -43,12 +44,22 @@ pub struct Context {
     inner: Arc<Inner>,
 }
 
+// shutdown_guard is triggered when the exit signal is received, but at this
+// time the whole system may not be prepared to exit yet.
+//
+// All plugins will received the `shutdown_guard` exit, but they can choose
+// ignore it, and using the `notify` signal instead.
+//
+// Some plugins may trigger the exit signal after the shutdown guard is
+// triggered, but if nobody triggers the exit signal after a timeout, the
+// system will trigger `exit` automatically.
 struct Inner {
     sink: PipelineCell,
     raw_sink: PipelineCell,
     pool: BytesPool,
     components: AnyMap,
     shutdown_guard: OnceLock<ShutdownGuard>,
+    real_exit: Notify,
 }
 
 impl std::fmt::Debug for Context {
@@ -65,6 +76,7 @@ impl Context {
                 raw_sink: PipelineCell::new(),
                 pool: new_bytes_pool(),
                 shutdown_guard: OnceLock::new(),
+                real_exit: Notify::new(),
                 components,
             }),
         }
@@ -129,12 +141,26 @@ impl Context {
         self.inner.components.values().map(|v| v.as_ref())
     }
 
-    pub async fn exiting(&self) {
+    /// Waiting for the shutdown guard exiting signal, returns when the process
+    /// exit signal (such as Ctrl+C) is received.
+    pub async fn shutdwon_triggered(&self) {
         if let Some(guard) = self.shutdown_guard() {
             guard.cancelled().await;
         } else {
             pending::<()>().await;
         }
+    }
+
+    /// Waiting for the real exit notify, this is triggered when someone calls
+    /// [`Context::trigger_exiting`] after the shutdown guard is triggered.
+    pub async fn exiting(&self) {
+        self.inner.real_exit.notified().await;
+    }
+
+    /// Trigger the exit signal, this is used to notify all plugins that the
+    /// system is real shutting down after the shutdown guard is triggered.
+    pub fn trigger_exiting(&self) {
+        self.inner.real_exit.notify_waiters();
     }
 
     /// Spawn a future on the current executor,
