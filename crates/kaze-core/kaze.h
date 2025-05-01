@@ -472,8 +472,7 @@ redo:
     long ret = syscall(
             SYS_futex, (void *)addr, FUTEX_WAKE, (wakeAll ? INT_MAX : 1), NULL,
             NULL, 0);
-    if (ret > 0) return KZ_OK;
-    if (ret == 0) errno = ENOENT; /* none to wake up */
+    if (ret >= 0) return KZ_OK;
     if (errno == ENOSYS) errno = ENOTSUP;
     return KZ_FAIL;
 
@@ -484,7 +483,7 @@ redo:
 #endif
 }
 
-#ifdef __linux__
+#if defined(__linux__) && defined(SYS_futex_waitv)
 #define kzQ_wait(mux, ret, addr, val, millis)          \
     do {                                               \
         if (!kz_has_futex_waitv) kzA_fetchadd(mux, 1); \
@@ -708,7 +707,7 @@ KZ_API int kz_shutdown(kz_State *S, int mode) {
             kz_futex_wake(&S->write.info->need, 1);
     }
     if (mode != 0 && (int32_t)kzA_loadrelaxed(&S->read.info->mux) > 0) {
-#ifdef __linux__
+#ifdef SYS_futex_waitv
         if (kz_has_futex_waitv) {
             if (waked) kz_futex_wake(&S->write.info->used, 1);
         } else
@@ -1221,9 +1220,12 @@ KZ_API int kz_read(kz_State *S, kz_Context *ctx) {
 
     memset(ctx, 0, sizeof(kz_Context));
     ctx->state = &S->read;
-    return ctx->result = kzA_cmpandswap(&S->read.info->reading, 0, 1)
-                               ? kzQ_pop(ctx)
-                               : KZ_BUSY;
+    if (kzA_cmpandswap(&S->read.info->reading, 0, 1)) {
+        ctx->result = kzQ_pop(ctx);
+        assert(ctx->result == KZ_OK || ctx->result == KZ_AGAIN);
+        return ctx->result;
+    }
+    return ctx->result = KZ_BUSY;
 }
 
 KZ_API int kz_write(kz_State *S, kz_Context *ctx, size_t len) {
@@ -1242,6 +1244,7 @@ KZ_API int kz_write(kz_State *S, kz_Context *ctx, size_t len) {
             ctx->pos = 0, ctx->len = need;
             kzQ_setneed(&S->write, need);
         }
+        assert(ctx->result == KZ_OK || ctx->result == KZ_AGAIN);
         return ctx->result;
     }
     return ctx->result = KZ_BUSY;
@@ -1326,7 +1329,7 @@ KZ_API kz_State *kz_open(const char *name, int flags, size_t bufsize) {
     if (S == NULL) return NULL;
     S->hdr = NULL;
 
-#if defined(__linux__) && defined(SYS_futex_waitv)
+#ifdef SYS_futex_waitv
     kz_check_waitv();
 #endif
 
