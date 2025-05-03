@@ -3,10 +3,7 @@ use std::sync::LazyLock;
 
 use anyhow::Context as _;
 use kaze_plugin::clap::{crate_version, Parser};
-use kaze_plugin::protocol::packet::Packet;
-use kaze_plugin::protocol::proto::Hdr;
 use kaze_plugin::tokio_graceful::Shutdown;
-use tokio::select;
 use tokio::task::JoinSet;
 use tower::layer::util::Identity;
 use tracing::info;
@@ -71,13 +68,6 @@ impl Sidecar {
 
     /// Run the sidecar
     pub async fn run(self) -> anyhow::Result<()> {
-        if !self.options.host_cmd.is_empty() {
-            let ctx = self.ctx.clone();
-            let host_cmd = self.options.host_cmd.clone();
-            tokio::spawn(async move { Self::run_host_cmd(ctx, host_cmd) });
-            return Ok(());
-        }
-
         let mut set = JoinSet::new();
         for plugin in self.ctx.components() {
             if let Some(fut) = plugin.run() {
@@ -113,51 +103,6 @@ impl Sidecar {
             return Err(anyhow::anyhow!("failed to set shutdown guard"));
         }
         self.run().await
-    }
-
-    async fn run_host_cmd(
-        ctx: Context,
-        host_cmd: Vec<String>,
-    ) -> anyhow::Result<()> {
-        let mut cmd = tokio::process::Command::new(&host_cmd[0]);
-        cmd.args(&host_cmd[1..]);
-        let mut host = cmd.spawn().context("failed to spawn host command")?;
-        info!("host command started");
-
-        // wait for host command to finish
-        info!("wait for host exiting");
-        let is_shutdown = select! {
-            status = host.wait() => {
-                info!("host command exited with status {}", status?.code().unwrap_or(-1));
-                ctx.trigger_exiting();
-                false
-            }
-            _ = ctx.shutdwon_triggered() => {
-                true
-            }
-        };
-
-        if is_shutdown {
-            ctx.raw_send((
-                Packet::from_hdr(Hdr {
-                    body_type: "exit".to_string(),
-                    ..Hdr::default()
-                }),
-                None,
-            ))
-            .await?;
-            select! {
-                _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
-                    info!("host command exit timeout");
-                    host.kill().await?;
-                }
-                status = host.wait() => {
-                    info!("host command exited with status {}", status?.code().unwrap_or(-1));
-                }
-            }
-        }
-
-        Ok(())
     }
 }
 

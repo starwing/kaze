@@ -24,6 +24,7 @@ use kaze_resolver::{Resolver, ResolverExt as _};
 
 use crate::{
     config::{ConfigBuilder, ConfigFileBuilder, ConfigMap},
+    host::Host,
     plugins::{corral, log, tracker},
     sidecar::{Options, Sidecar, VERSION},
 };
@@ -251,11 +252,14 @@ impl<F, RS, R> SidecarBuilder<StatePipeline<F, RS, R>> {
         // construct the context
         let sink = BoxCloneSyncService::new(sink.into_tower());
 
-        let ctx = ctx_builder.build();
-        ctx.sink().set(sink);
-
         let mut config = self.state.config;
         let options = config.take::<Options>().unwrap();
+
+        let ctx = ctx_builder
+            .register(Host::new(options.host_cmd.clone()))
+            .build();
+        ctx.sink().set(sink);
+
         Ok(Sidecar::new(
             ctx,
             options,
