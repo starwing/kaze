@@ -9,7 +9,7 @@ use tracing_appender::rolling::Rotation;
 
 use super::LogService;
 
-/// log file configuration
+// log file configuration
 #[derive(Args, Serialize, Deserialize, Clone, Debug)]
 #[serde(crate = "kaze_plugin::serde")]
 #[group(id = "LogOptions")]

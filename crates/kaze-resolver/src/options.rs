@@ -13,7 +13,7 @@ use kaze_plugin::{
 
 use crate::{Resolver, ResolverNoPlugin, cached::Cached, local::Local};
 
-/// local resolver configurations
+// local resolver configurations
 #[derive(Args, Serialize, Deserialize, Clone, Debug)]
 #[command(next_help_heading = "Local resolver configurations")]
 #[group(id = "LocalOptions")]

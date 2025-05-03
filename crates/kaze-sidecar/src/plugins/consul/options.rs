@@ -1,6 +1,7 @@
 use kaze_plugin::clap::Args;
 use kaze_plugin::serde::{Deserialize, Serialize};
 
+// consul resolver configurations
 #[derive(Args, Serialize, Deserialize, Clone, Debug)]
 #[serde(crate = "kaze_plugin::serde")]
 #[command(next_help_heading = "Consul resolver configurations")]

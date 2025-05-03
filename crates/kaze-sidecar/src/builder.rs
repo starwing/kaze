@@ -52,7 +52,7 @@ pub struct SidecarBuilder<State> {
 }
 
 impl SidecarBuilder<StateFilter<Identity>> {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         // init intial log
         let temp_log = tracing_subscriber::registry()
             .with(tracing_subscriber::fmt::layer())

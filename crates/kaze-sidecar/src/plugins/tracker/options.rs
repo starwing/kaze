@@ -6,7 +6,7 @@ use kaze_plugin::{
 
 use super::RpcTracker;
 
-/// corral configurations
+// RPC call tracker configurations
 #[derive(Args, Serialize, Deserialize, Clone, Debug)]
 #[serde(crate = "kaze_plugin::serde")]
 #[command(next_help_heading = "Tracker configurations")]

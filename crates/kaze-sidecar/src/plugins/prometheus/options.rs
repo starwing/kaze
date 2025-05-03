@@ -9,7 +9,7 @@ use kaze_plugin::{
 
 use super::PrometheusService;
 
-/// prometheus push gateway configuration
+// prometheus push gateway configuration
 #[derive(Args, Serialize, Deserialize, Clone, Debug)]
 #[serde(crate = "kaze_plugin::serde")]
 #[group(id = "PrometheusOptions")]

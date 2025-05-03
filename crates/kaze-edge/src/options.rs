@@ -7,7 +7,7 @@ use kaze_plugin::{ClapDefault, clap};
 
 use crate::Edge;
 
-/// Host bridge configurations
+// Host bridge configurations
 #[derive(Args, Serialize, Deserialize, Clone, Debug)]
 #[serde(crate = "kaze_plugin::serde")]
 #[command(next_help_heading = "Host bridge configurations")]

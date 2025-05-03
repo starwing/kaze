@@ -23,7 +23,7 @@ parking_lot.workspace = true
 thingbuf.workspace = true
 tokio-stream.workspace = true
 tokio-util = { workspace = true, features = ["rt"] }
-tokio.workspace = true
+tokio = { workspace = true, features = ["process"] }
 toml.workspace = true
 tower.workspace = true
 tracing-appender.workspace = true

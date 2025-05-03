@@ -9,7 +9,7 @@ use kaze_plugin::{
 
 use super::Corral;
 
-/// corral configurations
+// corral configurations
 #[derive(Args, Serialize, Deserialize, Clone, Debug)]
 #[serde(crate = "kaze_plugin::serde")]
 #[command(next_help_heading = "Corral configurations")]
