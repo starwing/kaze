@@ -68,11 +68,8 @@ impl Recycle<Action> for ActionRecycler {
 }
 
 impl Plugin for RpcTracker {
-    fn init(&self, context: kaze_plugin::Context) {
-        self.inner.ctx.set(context).unwrap();
-    }
-    fn context(&self) -> &Context {
-        self.inner.ctx.get().unwrap()
+    fn context_storage(&self) -> Option<&OnceLock<Context>> {
+        Some(&self.inner.ctx)
     }
     fn run(&self) -> Option<kaze_plugin::PluginRunFuture> {
         let rx = self.inner.rx.lock().take().unwrap();

@@ -8,6 +8,7 @@ pub struct NonPlugin<T> {
 }
 
 impl<T> NonPlugin<T> {
+    #[inline]
     pub fn new(inner: T) -> Self {
         Self { inner }
     }
@@ -15,10 +16,4 @@ impl<T> NonPlugin<T> {
 
 make_wrapper!(NonPlugin);
 
-impl<T: Clone + Sync + Send + 'static> Plugin for NonPlugin<T> {
-    fn init(&self, _context: crate::Context) {}
-
-    fn context(&self) -> &crate::Context {
-        unimplemented!()
-    }
-}
+impl<T: Clone + Sync + Send + 'static> Plugin for NonPlugin<T> {}

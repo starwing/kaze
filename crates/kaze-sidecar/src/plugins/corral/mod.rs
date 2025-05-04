@@ -56,8 +56,8 @@ impl Plugin for Corral {
             .unwrap();
         self.inner.ctx.set(ctx).unwrap();
     }
-    fn context(&self) -> &Context {
-        self.inner.ctx.get().unwrap()
+    fn context_storage(&self) -> Option<&OnceLock<Context>> {
+        Some(&self.inner.ctx)
     }
     fn run(
         &self,

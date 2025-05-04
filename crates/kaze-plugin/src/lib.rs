@@ -3,7 +3,10 @@ mod context;
 mod local;
 mod wrapper;
 
-use std::{any::Any, sync::Arc};
+use std::{
+    any::Any,
+    sync::{Arc, OnceLock},
+};
 
 use kaze_protocol::message::PacketWithAddr;
 use kaze_util::tower_ext::CellService;
@@ -33,16 +36,36 @@ pub type PluginRunFuture =
 
 /// a trait that inits the plugin, and provides a context to the plugin.
 pub trait Plugin: AnyClone + Send + Sync + 'static {
+    /// Get the name of the plugin
+    #[inline]
     fn name(&self) -> &'static str {
         std::any::type_name::<Self>()
     }
 
-    fn init(&self, _ctx: Context) {}
-
-    fn context(&self) -> &Context {
-        unimplemented!("context() is not implemented for Plugin");
+    /// Initialize the plugin with the context.
+    #[inline]
+    fn init(&self, ctx: Context) {
+        if let Some(storage) = self.context_storage() {
+            storage.set(ctx).expect("Context already initialized");
+        }
     }
 
+    /// Get the storage for the context in the plugin.
+    #[inline]
+    fn context_storage(&self) -> Option<&OnceLock<Context>> {
+        None
+    }
+
+    /// Convenience method to get the context from the storage.
+    #[inline]
+    fn context(&self) -> &Context {
+        self.context_storage()
+            .and_then(|s| s.get())
+            .expect("Context not initialized for Plugin")
+    }
+
+    /// Get the main logic of the plugin, if exists.
+    #[inline]
     fn run(&self) -> Option<PluginRunFuture> {
         None
     }
@@ -55,19 +78,20 @@ pub trait PluginFactory: Send + Sync + 'static {
 }
 
 pub trait ArcPlugin: Send + Sync + 'static {
-    fn init(self: &Arc<Self>, context: Context);
-    fn context(self: &Arc<Self>) -> &Context;
+    /// Get the storage for the context in the plugin.
+    #[inline]
+    fn context_storage(self: &Arc<Self>) -> Option<&OnceLock<Context>> {
+        None
+    }
 }
 
 impl<T> Plugin for Arc<T>
 where
     T: 'static + ArcPlugin,
 {
-    fn init(&self, context: Context) {
-        self.init(context);
-    }
-    fn context(&self) -> &Context {
-        self.context()
+    #[inline]
+    fn context_storage(&self) -> Option<&OnceLock<Context>> {
+        self.context_storage()
     }
 }
 
@@ -82,24 +106,29 @@ impl<T> AnyClone for T
 where
     T: 'static + Plugin + Clone,
 {
+    #[inline]
     fn clone_box(&self) -> Box<dyn Plugin> {
         Box::new(self.clone())
     }
 
+    #[inline]
     fn as_any(&self) -> &dyn Any {
         self
     }
 
+    #[inline]
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 
+    #[inline]
     fn into_any(self: Box<Self>) -> Box<dyn Any> {
         self
     }
 }
 
 impl Clone for Box<dyn Plugin> {
+    #[inline]
     fn clone(&self) -> Self {
         (**self).clone_box()
     }

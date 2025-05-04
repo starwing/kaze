@@ -75,11 +75,8 @@ impl Host {
 }
 
 impl Plugin for Host {
-    fn init(&self, ctx: kaze_plugin::Context) {
-        self.inner.ctx.set(ctx).unwrap();
-    }
-    fn context(&self) -> &kaze_plugin::Context {
-        self.inner.ctx.get().unwrap()
+    fn context_storage(&self) -> Option<&OnceLock<kaze_plugin::Context>> {
+        Some(&self.inner.ctx)
     }
     fn run(&self) -> Option<kaze_plugin::PluginRunFuture> {
         if self.inner.host_cmd.is_empty() {

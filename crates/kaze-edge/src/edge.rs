@@ -66,11 +66,13 @@ impl Edge {
     }
 
     /// Get the channel name.
+    #[inline]
     pub fn name(&self) -> Cow<'_, str> {
         self.channel.name()
     }
 
     /// Get the channel ident.
+    #[inline]
     pub fn ident(&self) -> Ipv4Addr {
         self.ident
     }
@@ -86,6 +88,7 @@ impl Edge {
         Channel::unlink(&name).context("Failed to unlink completion queue")
     }
 
+    #[inline]
     pub fn unlink_guard(&self) -> kaze_core::UnlinkGuard {
         self.channel.unlink_guard()
     }
@@ -109,6 +112,7 @@ impl Receiver {
         }
     }
 
+    #[inline]
     pub fn shutdown(&self) -> anyhow::Result<()> {
         self.rx.shutdown().map_err(Into::into)
     }
@@ -153,12 +157,9 @@ impl Receiver {
 }
 
 impl Plugin for Receiver {
-    fn init(&self, ctx: kaze_plugin::Context) {
-        self.ctx.set(ctx).unwrap();
-    }
-
-    fn context(&self) -> &kaze_plugin::Context {
-        self.ctx.get().unwrap()
+    #[inline]
+    fn context_storage(&self) -> Option<&OnceLock<kaze_plugin::Context>> {
+        Some(&self.ctx)
     }
 
     fn run(&self) -> Option<kaze_plugin::PluginRunFuture> {
@@ -201,6 +202,7 @@ impl Sender {
         }
     }
 
+    #[inline]
     pub async fn ident(&self) -> u32 {
         self.ident.to_bits()
     }
@@ -260,11 +262,9 @@ impl AsyncService<Message> for Sender {
 }
 
 impl Plugin for Sender {
-    fn init(&self, ctx: kaze_plugin::Context) {
-        self.inner.ctx.set(ctx).unwrap();
-    }
-    fn context(&self) -> &kaze_plugin::Context {
-        self.inner.ctx.get().unwrap()
+    #[inline]
+    fn context_storage(&self) -> Option<&OnceLock<kaze_plugin::Context>> {
+        Some(&self.inner.ctx)
     }
 }
 
