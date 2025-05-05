@@ -12,7 +12,7 @@ use kaze_plugin::{
 use kaze_protocol::packet::Packet;
 use metrics::counter;
 use tokio::{select, sync::Mutex, task::spawn_blocking};
-use tracing::{info, warn};
+use tracing::{info, trace, warn};
 
 use kaze_core::{Channel, OwnedReadHalf, OwnedWriteHalf};
 use kaze_plugin::protocol::{bytes::Buf, message::Message};
@@ -255,6 +255,7 @@ impl AsyncService<Message> for Sender {
                 msg.packet().as_buf(&self.inner.ctx.get().unwrap().pool()),
             )
             .await?;
+            trace!(hdr = ?msg.packet().hdr(), "send packet to host");
             return Ok(None);
         }
         Ok(Some(msg))

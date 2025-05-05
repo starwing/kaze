@@ -1,6 +1,9 @@
+use std::time::Duration;
+
 use kaze_plugin::{
     clap::Args,
     serde::{Deserialize, Serialize},
+    util::parser::DurationString,
     PluginFactory,
 };
 
@@ -17,16 +20,25 @@ pub struct Options {
     #[arg(short, long, default_value_t = default_tracker_queue_size())]
     #[arg(value_name = "LEN")]
     pub tracker_queue_size: usize,
+
+    #[serde(default = "default_exit_timeout")]
+    #[arg(short, long, default_value_t = default_exit_timeout())]
+    #[arg(value_name = "TIMEOUT")]
+    pub exit_timeout: DurationString,
 }
 
 impl PluginFactory for Options {
     type Plugin = RpcTracker;
 
-    fn build(self) -> anyhow::Result<Self::Plugin> {
-        Ok(RpcTracker::new(self.tracker_queue_size))
+    fn build(&self) -> anyhow::Result<Self::Plugin> {
+        Ok(RpcTracker::new(self))
     }
 }
 
 fn default_tracker_queue_size() -> usize {
     1024
+}
+
+fn default_exit_timeout() -> DurationString {
+    DurationString::new(Duration::from_secs(1))
 }

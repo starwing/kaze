@@ -87,12 +87,12 @@ impl Plugin for Corral {
 }
 
 impl Corral {
-    pub fn new(options: Options) -> Self {
+    fn new(options: &Options) -> Self {
         let limit = options.limit;
         Self {
             inner: Arc::new(Inner {
                 ctx: OnceLock::new(),
-                options,
+                options: options.clone(),
                 decoder: OnceLock::new(),
                 group: Group::new(),
                 sock_map: Mutex::new(

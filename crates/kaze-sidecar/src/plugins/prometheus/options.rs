@@ -46,7 +46,7 @@ pub struct Options {
 impl PluginFactory for Options {
     type Plugin = PrometheusService;
 
-    fn build(self) -> anyhow::Result<Self::Plugin> {
+    fn build(&self) -> anyhow::Result<Self::Plugin> {
         Ok(PrometheusService)
     }
 }

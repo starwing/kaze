@@ -1,10 +1,7 @@
 use std::sync::{Arc, OnceLock};
 
 use anyhow::Context as _;
-use kaze_plugin::{
-    protocol::{packet::Packet, proto::Hdr},
-    Plugin,
-};
+use kaze_plugin::Plugin;
 use tokio::select;
 use tracing::info;
 
@@ -50,15 +47,6 @@ impl Host {
         };
 
         if is_shutdown {
-            self.context()
-                .raw_send((
-                    Packet::from_hdr(Hdr {
-                        body_type: "exit".to_string(),
-                        ..Hdr::default()
-                    }),
-                    None,
-                ))
-                .await?;
             select! {
                 _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
                     info!("host command exit timeout");
@@ -79,14 +67,16 @@ impl Plugin for Host {
         Some(&self.inner.ctx)
     }
     fn run(&self) -> Option<kaze_plugin::PluginRunFuture> {
+        let host = self.clone();
         if self.inner.host_cmd.is_empty() {
             info!("No host command provided, skipping host running");
+            // send exit packet even if no host command is provided
             return None;
         }
-        let host = self.clone();
         Some(Box::pin(async move { host.start().await }))
     }
 }
+
 #[cfg(test)]
 mod tests {
     use kaze_plugin::Context;
@@ -103,7 +93,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_host_cmd() {
         let host = Host::new(vec![]);
-        assert!(host.run().is_none());
+        assert!(host.run().is_some());
     }
 
     #[tokio::test]

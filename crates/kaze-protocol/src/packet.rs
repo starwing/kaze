@@ -108,10 +108,8 @@ impl Packet {
     /// get a response packet for specific error code
     pub fn from_retcode(hdr: Hdr, ret_code: RetCode) -> Self {
         Self::from_hdr(Hdr {
-            body_type: String::new(),
             ret_code: ret_code as u32,
             rpc_type: Some(RpcType::Rsp(hdr.seq().unwrap_or(0))),
-            timeout: 0,
             ..hdr
         })
     }

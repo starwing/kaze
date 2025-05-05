@@ -19,14 +19,10 @@ use tokio_util::time::{delay_queue::Key, DelayQueue};
 use tracing::{error, info};
 
 use kaze_plugin::{
-    local_node,
     protocol::{
         message::Message,
         packet::Packet,
-        proto::{
-            hdr::{self, RouteType},
-            Hdr, RetCode,
-        },
+        proto::{hdr::RpcType, Hdr, RetCode},
     },
     service::AsyncService,
 };
@@ -43,6 +39,7 @@ pub struct RpcTracker {
 struct Inner {
     rpc_map: HashMap<u32, Info>,
     seq: AtomicU32,
+    exit_timeout: Duration,
     tx: Sender<Action, ActionRecycler>,
     rx: Mutex<Option<Receiver<Action, ActionRecycler>>>,
     ctx: OnceLock<Context>,
@@ -76,7 +73,7 @@ impl Plugin for RpcTracker {
         let tracker = self.clone();
         let ctx = self.context().clone();
         Some(Box::pin(async move {
-            tracker.main_loop(rx).await;
+            tracker.main_loop(rx).await?;
             info!("RpcTracker exiting");
             ctx.trigger_exiting();
             Ok(())
@@ -85,13 +82,17 @@ impl Plugin for RpcTracker {
 }
 
 impl RpcTracker {
-    pub fn new(capacity: usize) -> Self {
-        let (tx, rx) = thingbuf::mpsc::with_recycle(capacity, ActionRecycler);
+    pub fn new(opt: &Options) -> Self {
+        let (tx, rx) = thingbuf::mpsc::with_recycle(
+            opt.tracker_queue_size,
+            ActionRecycler,
+        );
         let obj = Self {
             inner: Arc::new(Inner {
                 ctx: OnceLock::new(),
                 rpc_map: HashMap::new(),
                 seq: AtomicU32::new(114514),
+                exit_timeout: opt.exit_timeout.into(),
                 tx,
                 rx: Mutex::new(Some(rx)),
             }),
@@ -99,13 +100,25 @@ impl RpcTracker {
         obj
     }
 
-    async fn main_loop(self, rx: Receiver<Action, ActionRecycler>) {
+    async fn main_loop(
+        self,
+        rx: Receiver<Action, ActionRecycler>,
+    ) -> anyhow::Result<()> {
         let mut queue = DelayQueue::new();
+        let mut exit_send = false;
         loop {
             let action = if queue.is_empty() {
                 select! {
                     insert = rx.recv() => insert,
-                    _ = self.context().shutdwon_triggered() => break,
+                    _ = self.context().shutdwon_triggered() => {
+                        if exit_send {
+                            break;
+                        }
+                        // shutdown triggered, wait and break the loop
+                        self.send_exit().await?;
+                        exit_send = true;
+                        continue;
+                    }
                 }
             } else {
                 select! {
@@ -129,7 +142,7 @@ impl RpcTracker {
                     if let Some(rpc_info) =
                         self.inner.rpc_map.pin().remove(&seq)
                     {
-                        queue.remove(&rpc_info.key);
+                        queue.try_remove(&rpc_info.key);
                     }
                 }
                 Some(Action::Expired(key)) => {
@@ -137,6 +150,7 @@ impl RpcTracker {
                 }
             }
         }
+        Ok(())
     }
 
     async fn handle_expired(&self, ctx: &Context, key: &u32) {
@@ -145,16 +159,24 @@ impl RpcTracker {
             let Some(rpc_info) = rpc_map.get(key) else {
                 return;
             };
-            let mut hdr = rpc_info.hdr.clone();
-            let local_ident = local_node().ident;
-            hdr.src_ident = local_ident;
-            hdr.route_type = Some(RouteType::DstIdent(local_ident));
-            Packet::from_retcode(hdr, RetCode::RetTimeout)
+            Packet::from_retcode(rpc_info.hdr.clone(), RetCode::RetTimeout)
         };
-        if let Err(e) = ctx.raw_send((msg, None)).await {
+        if let Err(e) = ctx.send_local(msg).await {
             counter!("kaze_send_timeout_errors_total").increment(1);
             error!(error = %e, "Error sending timeout response");
         }
+    }
+
+    async fn send_exit(&self) -> anyhow::Result<()> {
+        self.context()
+            .send_local(Packet::from_hdr(Hdr {
+                body_type: "exit".to_string(),
+                rpc_type: Some(RpcType::Req(0)),
+                timeout: self.inner.exit_timeout.as_millis() as u32,
+                ..Hdr::default()
+            }))
+            .await?;
+        Ok(())
     }
 }
 
@@ -163,11 +185,8 @@ impl AsyncService<Message> for RpcTracker {
     type Error = anyhow::Error;
 
     async fn serve(&self, msg: Message) -> anyhow::Result<Self::Response> {
-        let res = self.record(msg).await;
-        if let Err(e) = res {
-            error!(error = %e, "Failed to record rpc info");
-        }
-        Ok(None)
+        let msg = self.record(msg).await?;
+        Ok(Some(msg))
     }
 }
 
@@ -184,16 +203,14 @@ impl RpcTracker {
         };
         // 3. record rpc info
         let r = match rpc_type {
-            hdr::RpcType::Req(_) => {
+            RpcType::Req(_) => {
                 self.assign_seq(req.packet_mut().hdr_mut());
                 self.inner
                     .tx
                     .send(Action::Insert(req.packet().hdr().clone()))
                     .await
             }
-            hdr::RpcType::Rsp(seq) => {
-                self.inner.tx.send(Action::Remove(seq)).await
-            }
+            RpcType::Rsp(seq) => self.inner.tx.send(Action::Remove(seq)).await,
         };
         if let Err(e) = r {
             error!(error = %e, "Failed to record rpc info");
@@ -203,7 +220,7 @@ impl RpcTracker {
 
     fn assign_seq(&self, hdr: &mut Hdr) {
         match &hdr.rpc_type {
-            Some(hdr::RpcType::Req(seq)) => {
+            Some(RpcType::Req(seq)) => {
                 let mut seq = *seq;
                 if seq == 0 {
                     seq = self
@@ -211,7 +228,7 @@ impl RpcTracker {
                         .seq
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
-                hdr.rpc_type = Some(hdr::RpcType::Req(seq));
+                hdr.rpc_type = Some(RpcType::Req(seq));
             }
             _ => {}
         }
@@ -231,9 +248,11 @@ mod tests {
     use tokio::sync::Notify;
     use tower::util::BoxCloneSyncService;
 
-    use hdr::RpcType;
     use kaze_plugin::{
-        protocol::message::{Destination, PacketWithAddr, Source},
+        protocol::{
+            message::{Destination, PacketWithAddr, Source},
+            proto::RetCode,
+        },
         service::{async_service_fn, ServiceExt},
     };
 
@@ -248,14 +267,17 @@ mod tests {
                 println!("message: {:?}", packet);
                 assert_eq!(packet.hdr().ret_code, RetCode::RetTimeout as u32);
                 ntf_clone.notify_one();
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             }
         })
         .into_tower();
         let sink = BoxCloneSyncService::new(sink);
-        let tracker = RpcTracker::new(10);
+        let tracker = RpcTracker::new(&Options {
+            tracker_queue_size: 10,
+            exit_timeout: "5s".parse().unwrap(),
+        });
         let ctx = Context::builder().register(tracker.clone()).build();
-        ctx.raw_sink().set(sink);
+        ctx.sink().set(sink);
         let msg = Message::new_with_destination(
             Packet::from_hdr(Hdr {
                 body_type: "test".into(),
@@ -266,6 +288,10 @@ mod tests {
             Source::from_local(),
             Destination::to_local(),
         );
+        let tracker_clone = tracker.clone();
+        tokio::spawn(async move {
+            let _ = tracker_clone.run().unwrap().await;
+        });
         let res = tracker.serve(msg).await;
         assert!(res.is_ok());
         notify.notified().await;

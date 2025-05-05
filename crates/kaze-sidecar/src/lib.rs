@@ -1,6 +1,7 @@
 mod builder;
 mod config;
 mod host;
+mod options;
 
 pub mod plugins;
 pub mod sidecar;

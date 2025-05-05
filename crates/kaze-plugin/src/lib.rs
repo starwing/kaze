@@ -74,7 +74,7 @@ pub trait Plugin: AnyClone + Send + Sync + 'static {
 pub trait PluginFactory: Send + Sync + 'static {
     type Plugin: Plugin + Clone;
 
-    fn build(self) -> anyhow::Result<Self::Plugin>;
+    fn build(&self) -> anyhow::Result<Self::Plugin>;
 }
 
 pub trait ArcPlugin: Send + Sync + 'static {

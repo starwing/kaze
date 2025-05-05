@@ -11,11 +11,12 @@ use tokio_graceful::{Shutdown, ShutdownGuard};
 
 use kaze_protocol::{
     message::PacketWithAddr,
-    packet::{BytesPool, new_bytes_pool},
+    packet::{BytesPool, Packet, new_bytes_pool},
+    proto::hdr::RouteType,
 };
 use kaze_util::tower_ext::ServiceExt;
 
-use crate::{PipelineCell, Plugin};
+use crate::{PipelineCell, Plugin, local_node};
 
 type AnyMap = HashMap<TypeId, Box<dyn Plugin>, BuildHasherDefault<IdHasher>>;
 
@@ -55,7 +56,6 @@ pub struct Context {
 // system will trigger `exit` automatically.
 struct Inner {
     sink: PipelineCell,
-    raw_sink: PipelineCell,
     pool: BytesPool,
     components: AnyMap,
     shutdown_guard: OnceLock<ShutdownGuard>,
@@ -73,7 +73,6 @@ impl Context {
         Self {
             inner: Arc::new(Inner {
                 sink: PipelineCell::new(),
-                raw_sink: PipelineCell::new(),
                 pool: new_bytes_pool(),
                 shutdown_guard: OnceLock::new(),
                 real_exit: Notify::new(),
@@ -107,10 +106,6 @@ impl Context {
 
     pub fn sink(&self) -> &PipelineCell {
         &self.inner.sink
-    }
-
-    pub fn raw_sink(&self) -> &PipelineCell {
-        &self.inner.raw_sink
     }
 
     pub fn pool(&self) -> &BytesPool {
@@ -205,11 +200,13 @@ impl Context {
             .map_err(|e| anyhow::anyhow!("failed to send message: {}", e))
     }
 
-    /// Send message to the raw pipeline
-    pub async fn raw_send(&self, msg: PacketWithAddr) -> anyhow::Result<()> {
-        self.raw_sink()
+    pub async fn send_local(&self, mut msg: Packet) -> anyhow::Result<()> {
+        let local = local_node().ident;
+        msg.hdr_mut().route_type = Some(RouteType::DstIdent(local));
+        msg.hdr_mut().src_ident = local;
+        self.sink()
             .clone()
-            .ready_call(msg)
+            .ready_call((msg, None))
             .await
             .map_err(|e| anyhow::anyhow!("failed to send message: {}", e))
     }

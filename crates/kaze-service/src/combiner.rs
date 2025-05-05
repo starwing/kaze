@@ -105,17 +105,6 @@ impl<S, T> FilterChain<S, T> {
     }
 }
 
-impl<S, T, U> tower::Layer<U> for FilterChain<S, T>
-where
-    Self: Clone,
-{
-    type Service = FilterChain<FilterChain<S, T>, U>;
-
-    fn layer(&self, outer: U) -> Self::Service {
-        FilterChain::new(self.clone(), outer)
-    }
-}
-
 impl<Request, Middle, Response, S, T> AsyncService<Request>
     for FilterChain<S, T>
 where

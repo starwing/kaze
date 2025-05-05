@@ -1,40 +1,13 @@
-use std::path::PathBuf;
-use std::sync::LazyLock;
-
 use anyhow::Context as _;
-use kaze_plugin::clap::{crate_version, Parser};
 use kaze_plugin::tokio_graceful::Shutdown;
 use tokio::task::JoinSet;
 use tower::layer::util::Identity;
 use tracing::info;
 use tracing_appender::non_blocking::WorkerGuard;
 
-use kaze_plugin::serde::{Deserialize, Serialize};
 use kaze_plugin::Context;
 
-use crate::builder::{SidecarBuilder, StateFilter};
-
-/// The kaze sidecar for host
-#[derive(Parser, Serialize, Deserialize, Clone, Debug)]
-#[serde(crate = "kaze_plugin::serde")]
-#[command(version = VERSION.as_str(), about)]
-pub struct Options {
-    /// Name of config file (default: sidecar.toml)
-    #[arg(short, long)]
-    #[arg(value_name = "PATH")]
-    #[serde(skip)]
-    pub config: Option<PathBuf>,
-
-    /// host command line to run after sidecar started
-    #[arg(trailing_var_arg = true)]
-    #[serde(skip)]
-    pub host_cmd: Vec<String>,
-
-    /// Count of worker threads (0 means autodetect)
-    #[arg(short = 'j', long)]
-    #[arg(value_name = "N")]
-    pub threads: Option<usize>,
-}
+use crate::options::{Options, OptionsBuilder};
 
 pub struct Sidecar {
     ctx: Context,
@@ -44,8 +17,8 @@ pub struct Sidecar {
 }
 
 impl Sidecar {
-    pub fn builder() -> SidecarBuilder<StateFilter<Identity>> {
-        SidecarBuilder::new()
+    pub fn options() -> OptionsBuilder<Identity> {
+        Options::builder()
     }
 
     pub(crate) fn new(
@@ -105,13 +78,3 @@ impl Sidecar {
         self.run().await
     }
 }
-
-pub(crate) static VERSION: LazyLock<String> = LazyLock::new(|| {
-    let git_version = bugreport::git_version!(fallback = "");
-
-    if git_version.is_empty() {
-        crate_version!().to_string()
-    } else {
-        format!("{} ({})", crate_version!(), git_version)
-    }
-});

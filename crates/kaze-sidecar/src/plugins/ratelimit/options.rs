@@ -45,8 +45,8 @@ pub struct Options {
 impl PluginFactory for Options {
     type Plugin = RateLimit;
 
-    fn build(self) -> anyhow::Result<Self::Plugin> {
-        Ok(RateLimit::new(&self))
+    fn build(&self) -> anyhow::Result<Self::Plugin> {
+        Ok(RateLimit::new(self))
     }
 }
 
