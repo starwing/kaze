@@ -1,6 +1,6 @@
 use std::fmt;
-use toml::Value;
 use toml::map::Map;
+use toml::Value;
 
 #[derive(Debug, PartialEq)]
 pub struct Error {
@@ -91,7 +91,7 @@ pub fn merge(value: Value, other: Value) -> Result<Value, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Error, merge};
+    use super::{merge, Error};
     use toml::Value;
 
     macro_rules! should_fail {
@@ -150,6 +150,11 @@ mod tests {
         should_match!(
             r#"foo = ["a", "b"]"#,
             r#"foo = ["c", "d"]"#,
+            r#"foo = ["a", "b"]"#,
+        );
+        should_match!(
+            r#"foo = ["a", "b"]"#,
+            r#"foo = ["+", "c", "d"]"#,
             r#"foo = ["a", "b", "c", "d"]"#,
         );
     }

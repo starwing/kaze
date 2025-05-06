@@ -93,7 +93,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_host_cmd() {
         let host = Host::new(vec![]);
-        assert!(host.run().is_some());
+        assert!(host.run().is_none());
     }
 
     #[tokio::test]

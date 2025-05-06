@@ -3,9 +3,9 @@ use std::{ffi::OsString, path::PathBuf, sync::LazyLock};
 use anyhow::Context as _;
 use clap::{crate_version, Parser};
 use clap::{CommandFactory as _, FromArgMatches as _};
-use kaze_plugin::service::FilterChain;
+use kaze_plugin::service::{AsyncService, FilterChain};
 use kaze_plugin::{Context, ContextBuilder};
-use tower::layer::util::{Identity, Stack};
+use tower::layer::util::Stack;
 
 use kaze_plugin::{
     serde::{Deserialize, Serialize},
@@ -14,9 +14,9 @@ use kaze_plugin::{
 use tower::Layer;
 
 use crate::builder::SidecarBuilder;
-use crate::config::ConfigFileBuilder;
+use crate::config_map::ConfigFileBuilder;
 use crate::{
-    config::{ConfigBuilder, ConfigMap},
+    config_map::{ConfigBuilder, ConfigMap},
     plugins::{corral, tracker},
 };
 
@@ -43,7 +43,7 @@ pub struct Options {
 }
 
 impl Options {
-    pub fn builder() -> OptionsBuilder<Identity> {
+    pub fn builder() -> OptionsBuilder<FilterEnd> {
         OptionsBuilder::new(Self::new_config_builder(Self::command()))
     }
 
@@ -62,12 +62,11 @@ pub struct OptionsBuilder<L> {
     layer: L,
 }
 
-impl OptionsBuilder<Identity> {
+impl OptionsBuilder<FilterEnd> {
     fn new(cfg: ConfigBuilder) -> Self {
-        let layer = Identity::new();
         Self {
             config_builder: cfg,
-            layer,
+            layer: FilterEnd,
         }
     }
 }
@@ -106,11 +105,7 @@ impl<L> OptionsBuilder<L> {
         T: Into<OsString> + Clone,
         L: Layer<
             anyhow::Result<(FilterStart, ConfigMap, ContextBuilder)>,
-            Service = anyhow::Result<(
-                FilterLayer<F>,
-                ConfigMap,
-                ContextBuilder,
-            )>,
+            Service = anyhow::Result<(F, ConfigMap, ContextBuilder)>,
         >,
     {
         let cmd = self.config_builder.command();
@@ -130,10 +125,10 @@ impl<L> OptionsBuilder<L> {
             .context("merger build error")?;
         config.insert(options);
 
-        let (layer, config, cb) =
+        let (filter, config, cb) =
             self.layer
                 .layer(Ok((FilterStart, config, Context::builder())))?;
-        Ok(SidecarBuilder::new(layer.plugin, config, cb))
+        Ok(SidecarBuilder::new(filter, config, cb))
     }
 }
 
@@ -170,6 +165,38 @@ impl<S> Layer<S> for FilterStart {
 
     fn layer(&self, next: S) -> Self::Service {
         FilterLayer::new(next)
+    }
+}
+
+type ChainContext<T> = anyhow::Result<(T, ConfigMap, ContextBuilder)>;
+
+#[derive(Clone, Copy)]
+pub struct FilterEnd;
+
+impl Layer<ChainContext<FilterStart>> for FilterEnd {
+    type Service = ChainContext<FilterEnd>;
+
+    fn layer(&self, next: ChainContext<FilterStart>) -> Self::Service {
+        let (_, config, cb) = next?;
+        Ok((FilterEnd, config, cb))
+    }
+}
+
+impl<F> Layer<ChainContext<FilterLayer<F>>> for FilterEnd {
+    type Service = ChainContext<F>;
+
+    fn layer(&self, next: ChainContext<FilterLayer<F>>) -> Self::Service {
+        let (filter_layer, config, cb) = next?;
+        Ok((filter_layer.plugin, config, cb))
+    }
+}
+
+impl<Request: Send + 'static> AsyncService<Request> for FilterEnd {
+    type Response = Option<Request>;
+    type Error = anyhow::Error;
+
+    async fn serve(&self, req: Request) -> anyhow::Result<Self::Response> {
+        Ok(Some(req))
     }
 }
 
@@ -225,3 +252,67 @@ pub(crate) static VERSION: LazyLock<String> = LazyLock::new(|| {
         format!("{} ({})", crate_version!(), git_version)
     }
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kaze_plugin::Plugin;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_options_builder_creation() {
+        let builder = Options::builder();
+        assert!(builder.config_builder.command().get_name() == "kaze-sidecar");
+    }
+
+    #[test]
+    fn test_options_deserialization() {
+        let toml = r#"threads=4"#;
+        let options: Options = toml::from_str(toml).unwrap();
+        assert_eq!(options.threads, Some(4));
+        assert!(options.host_cmd.is_empty());
+    }
+
+    #[test]
+    fn test_version_string() {
+        let version = VERSION.to_string();
+        assert!(!version.is_empty());
+    }
+
+    #[derive(Clone)]
+    struct MockPlugin;
+
+    impl Plugin for MockPlugin {}
+
+    struct MockFactory;
+
+    impl PluginFactory for MockFactory {
+        type Plugin = MockPlugin;
+
+        fn build(&self) -> anyhow::Result<Self::Plugin> {
+            Ok(MockPlugin)
+        }
+    }
+
+    #[test]
+    fn test_plugin_creator() {
+        let creator = PluginCreator::<MockFactory>::new();
+        let mut config = ConfigMap::new(HashMap::new());
+        config.insert(MockFactory);
+        let cb = Context::builder();
+
+        let (plugin, cb) = creator.create_plugin(&mut config, cb).unwrap();
+        let config = cb.build();
+        assert!(plugin.name().ends_with("::MockPlugin"));
+        assert!(config.get::<MockPlugin>().is_some());
+    }
+
+    #[test]
+    fn test_filter_layer() {
+        let filter = FilterStart.layer(42);
+        assert_eq!(
+            std::mem::size_of_val(&filter.plugin),
+            std::mem::size_of_val(&42)
+        );
+    }
+}

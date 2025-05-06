@@ -1,3 +1,8 @@
+mod filefinder;
+mod merge;
+
+pub use filefinder::ConfigFileBuilder;
+
 use std::{
     any::{Any, TypeId},
     collections::HashMap,
@@ -95,23 +100,21 @@ where
         map: &mut HashMap<TypeId, Box<dyn Any>>,
     ) -> anyhow::Result<()> {
         // if the table is not present, use the default value
-        let config = match content.get(&self.name) {
-            Some(table) => T::deserialize(table.clone())?,
-            _ => default_from_clap(),
+        let mut config = match content.get(&self.name) {
+            Some(table) => Box::new(T::deserialize(table.clone())?),
+            _ => map
+                .remove(&TypeId::of::<T>())
+                .map(|v| v.downcast().unwrap())
+                .unwrap_or_else(|| Box::new(default_config())),
         };
-        // box the config
-        let config = Box::new(config);
-        if let Some(boxed) = map.get_mut(&TypeId::of::<T>()) {
-            if let Some(config) = boxed.downcast_mut::<T>() {
-                config.update_from_arg_matches_mut(matches).unwrap();
-            }
-        }
+        // update from matches
+        config.update_from_arg_matches_mut(matches)?;
         map.insert(TypeId::of::<T>(), config as Box<dyn Any>);
         Ok(())
     }
 }
 
-fn default_from_clap<T: clap::Args>() -> T {
+pub fn default_config<T: clap::Args>() -> T {
     let mut cmd = clap::Command::new("__dummy__");
     cmd = T::augment_args(cmd);
     let matches = cmd.get_matches_from(vec!["__dummy__"]);
@@ -125,7 +128,7 @@ pub struct ConfigMap {
 }
 
 impl ConfigMap {
-    fn new(map: HashMap<TypeId, Box<dyn Any>>) -> Self {
+    pub(crate) fn new(map: HashMap<TypeId, Box<dyn Any>>) -> Self {
         Self { map }
     }
 
@@ -139,6 +142,13 @@ impl ConfigMap {
         self.map
             .get(&TypeId::of::<T>())
             .and_then(|x| x.downcast_ref::<T>())
+    }
+
+    /// get the config mutably
+    pub fn get_mut<T: Any>(&mut self) -> Option<&mut T> {
+        self.map
+            .get_mut(&TypeId::of::<T>())
+            .and_then(|x| x.downcast_mut::<T>())
     }
 
     /// take the config

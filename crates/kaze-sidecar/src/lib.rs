@@ -1,5 +1,5 @@
 mod builder;
-mod config;
+mod config_map;
 mod host;
 mod options;
 

@@ -11,7 +11,7 @@
 //! use std::sync::Arc;
 //! use std::time::Duration;
 //!
-//! use async_singleflight::Group;
+//! use kaze_util::singleflight::Group;
 //!
 //! const RES: usize = 7;
 //!
@@ -22,12 +22,12 @@
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     let g = Arc::new(Group::<_, ()>::new());
+//!     let g = Arc::new(Group::<_, _, ()>::new());
 //!     let mut handlers = Vec::new();
 //!     for _ in 0..10 {
 //!         let g = g.clone();
 //!         handlers.push(tokio::spawn(async move {
-//!             let res = g.work("key", expensive_fn()).await.0;
+//!             let res = g.work("key", expensive_fn()).await;
 //!             let r = res.unwrap().unwrap();
 //!             println!("{}", r);
 //!         }));

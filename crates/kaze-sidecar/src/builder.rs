@@ -17,7 +17,7 @@ use kaze_plugin::{
 use kaze_resolver::ResolverExt as _;
 
 use crate::{
-    config::ConfigMap,
+    config_map::ConfigMap,
     host::Host,
     options::{Options, VERSION},
     plugins::{corral, log, tracker},
@@ -73,7 +73,7 @@ impl<F> SidecarBuilder<F> {
             .take::<kaze_edge::Options>()
             .unwrap()
             .build()
-            .unwrap();
+            .context("Failed to create edge")?;
         let _unlink_guard = edge.unlink_guard();
         let (tx, rx) = edge.into_split();
 
@@ -123,7 +123,7 @@ impl<F> SidecarBuilder<F> {
         ctx.sink()
             .set(BoxCloneSyncService::new(pipeline.into_tower()));
 
-        Ok(Sidecar::new(ctx, options, _unlink_guard, _log_guard))
+        Ok(Sidecar::new(ctx, options, Some(_unlink_guard), _log_guard))
     }
 
     fn init_log(
@@ -167,4 +167,105 @@ fn env_filter() -> EnvFilter {
         .with_default_directive(LevelFilter::TRACE.into())
         .with_env_var("KAZE_LOG")
         .from_env_lossy()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config_map::default_config;
+    use kaze_plugin::Context;
+    use std::{collections::HashMap, env::temp_dir, net::Ipv4Addr};
+
+    #[derive(Clone, Copy)]
+    struct TestFilter;
+
+    impl AsyncService<Message> for TestFilter {
+        type Response = Option<Message>;
+        type Error = anyhow::Error;
+
+        async fn serve(
+            &self,
+            req: Message,
+        ) -> anyhow::Result<Option<Message>> {
+            Ok(Some(req))
+        }
+    }
+
+    fn create_test_config() -> ConfigMap {
+        let mut config = ConfigMap::new(HashMap::new());
+        let temp_dir = temp_dir();
+
+        // Edge options
+        let edge_opts = kaze_edge::Options {
+            name: "test-sidecar".to_string(),
+            ident: Ipv4Addr::new(0, 0, 0, 1),
+            bufsize: 1024,
+            unlink: true,
+        };
+        config.insert(edge_opts);
+
+        // Local resolver options
+        config.insert(default_config::<kaze_resolver::LocalOptions>());
+
+        // Log options
+        let log_opts = log::Options {
+            directory: temp_dir.clone(),
+            prefix: "test.log".to_string(),
+            ..default_config()
+        };
+        config.insert(log_opts);
+
+        // Corral options
+        config.insert(default_config::<corral::Options>());
+
+        // Tracker options
+        config.insert(default_config::<tracker::Options>());
+
+        // Sidecar options
+        let sidecar_opts = Options {
+            host_cmd: vec!["echo".to_string()],
+            ..default_config()
+        };
+        config.insert(sidecar_opts);
+
+        config
+    }
+
+    #[test]
+    fn test_sidecar_builder() {
+        let config = create_test_config();
+        let ctx_builder = Context::builder();
+
+        let builder = SidecarBuilder::new(TestFilter, config, ctx_builder);
+        let sidecar = builder.build();
+
+        assert!(sidecar.is_ok());
+    }
+
+    #[test]
+    fn test_env_filter() {
+        let filter = env_filter();
+        assert!(filter.to_string().contains("trace"));
+    }
+
+    #[test]
+    fn test_init_log() {
+        let temp_dir = temp_dir();
+
+        let edge_opts = kaze_edge::Options {
+            name: "test-log".to_string(),
+            ident: Ipv4Addr::new(0, 0, 0, 1),
+            ..default_config()
+        };
+
+        let log_opts = log::Options {
+            directory: temp_dir.clone(),
+            prefix: "test.log".to_string(),
+            ..default_config()
+        };
+
+        let guard =
+            SidecarBuilder::<TestFilter>::init_log(&edge_opts, &log_opts);
+        assert!(guard.is_ok());
+    }
 }

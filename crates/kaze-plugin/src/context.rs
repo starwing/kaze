@@ -81,6 +81,10 @@ impl Context {
         }
     }
 
+    pub fn mock() -> Self {
+        Self::new(AnyMap::default())
+    }
+
     pub fn builder() -> ContextBuilder {
         ContextBuilder {
             components: AnyMap::default(),
