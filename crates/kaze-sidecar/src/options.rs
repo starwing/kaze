@@ -1,7 +1,7 @@
 use std::{ffi::OsString, path::PathBuf, sync::LazyLock};
 
 use anyhow::Context as _;
-use clap::{crate_version, Parser};
+use clap::{crate_version, Command, Parser};
 use clap::{CommandFactory as _, FromArgMatches as _};
 use kaze_plugin::service::{AsyncService, FilterChain};
 use kaze_plugin::{Context, ContextBuilder};
@@ -91,8 +91,12 @@ impl<L> OptionsBuilder<L> {
         }
     }
 
+    pub fn command(&self) -> &Command {
+        self.config_builder.command()
+    }
+
     pub fn debug_assert(self) -> Self {
-        self.config_builder.command().clone().debug_assert();
+        self.command().clone().debug_assert();
         self
     }
 
@@ -110,7 +114,20 @@ impl<L> OptionsBuilder<L> {
     {
         let cmd = self.config_builder.command();
         let mut matches = cmd.clone().get_matches_from(itr);
-        let options = Options::from_arg_matches(&matches)
+        self.into_builder(&mut matches)
+    }
+
+    pub fn into_builder<F>(
+        self,
+        matches: &mut clap::ArgMatches,
+    ) -> anyhow::Result<SidecarBuilder<F>>
+    where
+        L: Layer<
+            anyhow::Result<(FilterStart, ConfigMap, ContextBuilder)>,
+            Service = anyhow::Result<(F, ConfigMap, ContextBuilder)>,
+        >,
+    {
+        let options = Options::from_arg_matches(matches)
             .context("failed to parse options")?;
 
         let mut filefinder = ConfigFileBuilder::default();
@@ -121,7 +138,7 @@ impl<L> OptionsBuilder<L> {
         let content = filefinder.build().context("build file finder error")?;
         let mut config = self
             .config_builder
-            .build(&mut matches, content)
+            .build(matches, content)
             .context("merger build error")?;
         config.insert(options);
 
@@ -257,7 +274,6 @@ pub(crate) static VERSION: LazyLock<String> = LazyLock::new(|| {
 mod tests {
     use super::*;
     use kaze_plugin::Plugin;
-    use std::collections::HashMap;
 
     #[test]
     fn test_options_builder_creation() {
@@ -297,7 +313,7 @@ mod tests {
     #[test]
     fn test_plugin_creator() {
         let creator = PluginCreator::<MockFactory>::new();
-        let mut config = ConfigMap::new(HashMap::new());
+        let mut config = ConfigMap::mock();
         config.insert(MockFactory);
         let cb = Context::builder();
 

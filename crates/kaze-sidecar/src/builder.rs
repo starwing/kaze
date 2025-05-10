@@ -43,6 +43,10 @@ impl<F> SidecarBuilder<F> {
         }
     }
 
+    pub fn config(self) -> ConfigMap {
+        self.config
+    }
+
     pub fn build(mut self) -> anyhow::Result<Sidecar>
     where
         F: AsyncService<
@@ -174,7 +178,7 @@ mod tests {
     use super::*;
     use crate::config_map::default_config;
     use kaze_plugin::Context;
-    use std::{collections::HashMap, env::temp_dir, net::Ipv4Addr};
+    use std::{env::temp_dir, net::Ipv4Addr};
 
     #[derive(Clone, Copy)]
     struct TestFilter;
@@ -192,7 +196,7 @@ mod tests {
     }
 
     fn create_test_config() -> ConfigMap {
-        let mut config = ConfigMap::new(HashMap::new());
+        let mut config = ConfigMap::mock();
         let temp_dir = temp_dir();
 
         // Edge options

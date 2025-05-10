@@ -14,6 +14,7 @@ use kaze_plugin::serde::{Deserialize, Serialize};
 /// builder for ConfigMap
 pub struct ConfigBuilder {
     map: HashMap<TypeId, Box<dyn Any>>,
+    table: toml::Table,
     mergers: Vec<Box<dyn Merger>>,
     cmd: clap::Command,
 }
@@ -25,6 +26,7 @@ impl ConfigBuilder {
             cmd,
             mergers: Vec::new(),
             map: HashMap::new(),
+            table: toml::Table::new(),
         }
     }
 
@@ -58,11 +60,11 @@ impl ConfigBuilder {
     ) -> anyhow::Result<ConfigMap> {
         // update the structs from the matches
         for merger in self.mergers.drain(..) {
-            merger.merge(&content, matches, &mut self.map)?;
+            merger.merge(&content, matches, &mut self.map, &mut self.table)?;
         }
 
         // build the ConfigMap
-        Ok(ConfigMap::new(self.map))
+        Ok(ConfigMap::new(self.map, self.table))
     }
 }
 
@@ -72,6 +74,7 @@ trait Merger {
         content: &toml::Value,
         matches: &mut clap::ArgMatches,
         map: &mut HashMap<TypeId, Box<dyn Any>>,
+        table: &mut toml::Table,
     ) -> anyhow::Result<()>;
 }
 
@@ -91,13 +94,14 @@ impl<T> MergerImpl<T> {
 
 impl<T> Merger for MergerImpl<T>
 where
-    T: for<'a> Deserialize<'a> + clap::Args + 'static,
+    T: for<'a> Deserialize<'a> + Serialize + clap::Args + 'static,
 {
     fn merge(
         &self,
         content: &toml::Value,
         matches: &mut clap::ArgMatches,
         map: &mut HashMap<TypeId, Box<dyn Any>>,
+        table: &mut toml::Table,
     ) -> anyhow::Result<()> {
         // if the table is not present, use the default value
         let mut config = match content.get(&self.name) {
@@ -107,8 +111,11 @@ where
                 .map(|v| v.downcast().unwrap())
                 .unwrap_or_else(|| Box::new(default_config())),
         };
-        // update from matches
         config.update_from_arg_matches_mut(matches)?;
+        // update the value
+        let v = toml::Value::try_from(config.as_ref())?;
+        table.insert(self.name.clone(), v);
+        // update from matches
         map.insert(TypeId::of::<T>(), config as Box<dyn Any>);
         Ok(())
     }
@@ -125,11 +132,24 @@ pub fn default_config<T: clap::Args>() -> T {
 /// ConfigMap stores the parsed config
 pub struct ConfigMap {
     map: HashMap<TypeId, Box<dyn Any>>,
+    table: toml::Table,
 }
 
 impl ConfigMap {
-    pub(crate) fn new(map: HashMap<TypeId, Box<dyn Any>>) -> Self {
-        Self { map }
+    fn new(map: HashMap<TypeId, Box<dyn Any>>, table: toml::Table) -> Self {
+        Self { map, table }
+    }
+
+    pub fn mock() -> Self {
+        Self {
+            map: HashMap::new(),
+            table: toml::Table::new(),
+        }
+    }
+
+    /// get the toml config result
+    pub fn get_toml(&self) -> toml::Value {
+        toml::Value::Table(self.table.clone())
     }
 
     /// add new options to map

@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+toml.workspace = true
 
 [dependencies.kaze-sidecar]
 path = "../crates/kaze-sidecar"
