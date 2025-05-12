@@ -169,3 +169,62 @@ impl Node {
         Self { ident, addr }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr};
+
+    use crate::proto::Hdr;
+
+    use super::*;
+
+    #[test]
+    fn test_message_creation() {
+        let addr =
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+        let packet = Packet::from_hdr(Hdr::default());
+        let source = Source::from_remote(1, addr);
+
+        let message = Message::new(packet, source);
+        assert_eq!(message.source().ident(), 1);
+        assert!(matches!(message.destination(), Destination::Drop));
+
+        let message = Message::new_with_destination(
+            Packet::from_hdr(Hdr::default()),
+            source,
+            Destination::to_local(),
+        );
+        assert!(message.destination().is_local());
+    }
+
+    #[test]
+    fn test_message_conversion() {
+        let addr =
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+        let packet = Packet::from_hdr(Hdr::default());
+        let packet_with_addr = (packet, Some(addr));
+
+        let message: Message = packet_with_addr.into();
+        let packet = Packet::from_hdr(Hdr::default());
+        assert_eq!(message.source().ident(), packet.hdr().src_ident);
+
+        let (pwa, dst) = message.split();
+        assert_eq!(pwa.1, Some(addr));
+        assert!(dst.is_drop());
+    }
+
+    #[test]
+    fn test_destination_methods() {
+        let addr =
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+        let node = Node::new(1, addr);
+
+        let dst = Destination::to_remote(1, addr);
+        assert!(dst.is_remote());
+        assert!(!dst.is_local());
+        assert!(!dst.is_drop());
+
+        let dst = Destination::to_remote_list(vec![node].into_iter());
+        assert!(dst.is_remote());
+    }
+}

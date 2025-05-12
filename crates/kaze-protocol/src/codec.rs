@@ -105,13 +105,13 @@ impl Decoder for NetPacketCodec {
     }
 }
 
-impl Encoder<Packet> for NetPacketCodec {
+impl Encoder<&Packet> for NetPacketCodec {
     type Error = anyhow::Error;
 
     #[tracing::instrument(skip(self, dst))]
     fn encode(
         &mut self,
-        item: Packet,
+        item: &Packet,
         dst: &mut BytesMut,
     ) -> Result<(), Self::Error> {
         let mut buf = item.as_buf(&self.pool);
@@ -231,5 +231,61 @@ impl<T: AsRef<[u8]>> Buf for BufWrapper<T> {
 
     fn advance(&mut self, cnt: usize) {
         self.pos += cnt;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::packet::new_bytes_pool;
+
+    use super::*;
+    use tokio_util::bytes::Bytes;
+
+    #[test]
+    fn test_buf_wrapper() {
+        let data = Bytes::from_static(b"hello world");
+        let mut buf = BufWrapper::new(data);
+
+        assert_eq!(buf.remaining(), 11);
+        assert_eq!(buf.chunk(), b"hello world");
+
+        buf.advance(6);
+        assert_eq!(buf.remaining(), 5);
+        assert_eq!(buf.chunk(), b"world");
+
+        buf.rewind();
+        assert_eq!(buf.remaining(), 11);
+        assert_eq!(buf.chunk(), b"hello world");
+    }
+
+    #[test]
+    fn test_codec_encode_decode() {
+        let mut codec = NetPacketCodec::new(new_bytes_pool());
+        let mut bytes = BytesMut::new();
+
+        // Create test packet
+        let hdr = proto::Hdr {
+            rpc_type: Some(proto::hdr::RpcType::Req(1)),
+            ..Default::default()
+        };
+        let mut packet = Packet::from_hdr(hdr);
+        packet.body_mut().put_slice(b"test data");
+
+        // Test encode
+        codec.encode(&packet, &mut bytes).unwrap();
+
+        // Test decode
+        let decoded = codec.decode(&mut bytes).unwrap().unwrap();
+        assert_eq!(decoded.hdr().rpc_type, Some(proto::hdr::RpcType::Req(1)));
+        assert_eq!(decoded.body().chunk(), b"test data");
+    }
+
+    #[test]
+    fn test_decode_invalid_size() {
+        let mut bytes = BytesMut::new();
+        bytes.put_u32_le(1000); // Invalid size
+
+        let mut decoder = NetPacketDecoder::new();
+        assert!(matches!(decoder.decode(&mut bytes), Ok(None)));
     }
 }

@@ -169,3 +169,95 @@ impl<O, F: FnOnce() -> O> Drop for CallOnDrop<O, F> {
         f();
     }
 }
+#[cfg(test)]
+mod tests {
+    use std::{sync::Arc, task::Wake};
+
+    use super::*;
+
+    struct MockWaker;
+    impl Wake for MockWaker {
+        fn wake(self: Arc<Self>) {}
+    }
+
+    #[test]
+    fn test_reusable_box_future_basic() {
+        let waker = Arc::new(MockWaker).into();
+        let mut cx = Context::from_waker(&waker);
+
+        let mut box_fut = ReusableBoxFuture::new(async { 42 });
+        assert!(matches!(box_fut.poll(&mut cx), Poll::Ready(42)));
+    }
+
+    #[test]
+    fn test_reusable_box_future_set() {
+        let waker = Arc::new(MockWaker).into();
+        let mut cx = Context::from_waker(&waker);
+
+        let mut box_fut = ReusableBoxFuture::new(async { 1 });
+        assert!(matches!(box_fut.poll(&mut cx), Poll::Ready(1)));
+
+        box_fut.set(async { 2 });
+        assert!(matches!(box_fut.poll(&mut cx), Poll::Ready(2)));
+    }
+
+    #[test]
+    fn test_try_set_same_size() {
+        let mut box_fut = ReusableBoxFuture::new(async { "test1" });
+        assert!(box_fut.try_set(async { "test2" }).is_ok());
+    }
+
+    #[test]
+    fn test_try_set_different_size() {
+        // Future 1: output type u8, captures a small amount of data or nothing.
+        let future1 = async {
+            // A simple future that captures very little or nothing.
+            0u8
+        };
+
+        // Future 2: output type u8, captures a larger amount of data to ensure a different layout.
+        let data_to_capture = [0u8; 128]; // This array will be part of future2's state.
+        let future2 = async move {
+            // Use the captured data to ensure it's part of the future's state.
+            // The `move` keyword ensures `data_to_capture` is moved into the future.
+            data_to_capture[0]
+        };
+
+        // Check that these futures indeed have different layouts.
+        // Layout::for_value gets the layout of the actual value.
+        let layout1 = std::alloc::Layout::for_value(&future1);
+        let layout2 = std::alloc::Layout::for_value(&future2);
+
+        // This assertion is crucial for the test's validity.
+        // If the layouts happen to be the same
+        // (e.g., due to compiler optimizations or identical captures),
+        // the test wouldn't be verifying the intended "different size" scenario.
+        assert_ne!(
+            layout1, layout2,
+            "The layouts of future1 and future2 must be different"
+        );
+
+        // Initialize ReusableBoxFuture with future1. The output type T is u8.
+        let mut box_fut: ReusableBoxFuture<u8> =
+            ReusableBoxFuture::new(future1);
+
+        // Attempt to set future2. Since its layout is different from future1's,
+        // try_set should return Err. The output type (u8) is compatible.
+        // The Err variant contains the future that could not be set.
+        assert!(
+            box_fut.try_set(future2).is_err(),
+            "should return Err when with different layout."
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "poll after ready")]
+    fn test_poll_after_ready_panics() {
+        let waker = Arc::new(MockWaker).into();
+        let mut cx = Context::from_waker(&waker);
+        let mut box_fut = ReusableBoxFuture::new(async { 42 });
+
+        let _ = box_fut.poll(&mut cx);
+        let _ = box_fut.poll(&mut cx); // Should panic
+    }
+}

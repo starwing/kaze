@@ -10,12 +10,11 @@ Kaze is a Service Mesh framework designed to simplify microservice communication
 
 ## Features
 
+- **High-Performance IPC:** Utilizes shared memory channels via `kaze-core` for minimal communication overhead between the application and the sidecar.
 - **Service Discovery:** Dynamically discover and connect to other services within the mesh.
 - **Enhanced Logging:** Provides capabilities for structured and centralized logging from your microservices.
 - **Application Monitoring:** Collects metrics and facilitates monitoring of the health and performance of your services.
 - **RPC Facilitation:** Simplifies and potentially offloads aspects of Remote Procedure Calls between services.
-- **High-Performance IPC:** Utilizes shared memory channels via `kaze-core` for minimal communication overhead between the application and the sidecar.
-- **Transparent Sidecar:** Aims to integrate with applications with minimal to no code changes in the host application.
 
 ## Installation
 

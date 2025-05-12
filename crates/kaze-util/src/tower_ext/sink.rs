@@ -166,13 +166,13 @@ mod tests {
 
         // fill the buffer to full
         let mut cx = noop_context();
+        let packet = Packet::from_hdr(Hdr::default());
         loop {
             let r = Service::poll_ready(&mut sink, &mut cx);
             // framed always return Ready in poll_ready, unless the pending buffer is full
             assert!(r.is_ready());
 
-            let packet = Packet::from_hdr(Hdr::default());
-            match sink.call(packet).poll_unpin(&mut cx) {
+            match sink.call(&packet).poll_unpin(&mut cx) {
                 Poll::Ready(res) => {
                     assert!(res.is_ok());
                 }
