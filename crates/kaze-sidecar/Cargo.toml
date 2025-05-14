@@ -25,6 +25,7 @@ tokio-stream.workspace = true
 tokio-util = { workspace = true, features = ["rt"] }
 tokio = { workspace = true, features = ["process"] }
 toml.workspace = true
+toml_edit.workspace = true
 tower.workspace = true
 tracing-appender.workspace = true
 tracing-subscriber.workspace = true
@@ -33,6 +34,7 @@ tracing.workspace = true
 kaze-plugin.workspace = true
 kaze-edge.workspace = true
 kaze-resolver.workspace = true
+documented-toml.workspace = true
 
 [dev-dependencies]
 scopeguard = "1.2.0"

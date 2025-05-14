@@ -9,12 +9,13 @@ use std::{
 };
 
 use clap::ArgMatches;
+use documented_toml::DocumentedToml;
 use kaze_plugin::serde::{Deserialize, Serialize};
 
 /// builder for ConfigMap
 pub struct ConfigBuilder {
     map: HashMap<TypeId, Box<dyn Any>>,
-    table: toml::Table,
+    table: toml_edit::Table,
     mergers: Vec<Box<dyn Merger>>,
     cmd: clap::Command,
 }
@@ -26,13 +27,17 @@ impl ConfigBuilder {
             cmd,
             mergers: Vec::new(),
             map: HashMap::new(),
-            table: toml::Table::new(),
+            table: toml_edit::Table::new(),
         }
     }
 
     /// add a config table to the builder
     pub fn add<
-        T: for<'a> Deserialize<'a> + Serialize + clap::Args + 'static,
+        T: for<'a> Deserialize<'a>
+            + Serialize
+            + DocumentedToml
+            + clap::Args
+            + 'static,
     >(
         mut self,
         name: impl ToString,
@@ -74,7 +79,7 @@ trait Merger {
         content: &toml::Value,
         matches: &mut clap::ArgMatches,
         map: &mut HashMap<TypeId, Box<dyn Any>>,
-        table: &mut toml::Table,
+        table: &mut toml_edit::Table,
     ) -> anyhow::Result<()>;
 }
 
@@ -94,14 +99,18 @@ impl<T> MergerImpl<T> {
 
 impl<T> Merger for MergerImpl<T>
 where
-    T: for<'a> Deserialize<'a> + Serialize + clap::Args + 'static,
+    T: for<'a> Deserialize<'a>
+        + Serialize
+        + DocumentedToml
+        + clap::Args
+        + 'static,
 {
     fn merge(
         &self,
         content: &toml::Value,
         matches: &mut clap::ArgMatches,
         map: &mut HashMap<TypeId, Box<dyn Any>>,
-        table: &mut toml::Table,
+        table: &mut toml_edit::Table,
     ) -> anyhow::Result<()> {
         // if the table is not present, use the default value
         let mut config = match content.get(&self.name) {
@@ -113,8 +122,7 @@ where
         };
         config.update_from_arg_matches_mut(matches)?;
         // update the value
-        let v = toml::Value::try_from(config.as_ref())?;
-        table.insert(self.name.clone(), v);
+        table.insert(&self.name, config.as_toml());
         // update from matches
         map.insert(TypeId::of::<T>(), config as Box<dyn Any>);
         Ok(())
@@ -132,24 +140,27 @@ pub fn default_config<T: clap::Args>() -> T {
 /// ConfigMap stores the parsed config
 pub struct ConfigMap {
     map: HashMap<TypeId, Box<dyn Any>>,
-    table: toml::Table,
+    table: toml_edit::Table,
 }
 
 impl ConfigMap {
-    fn new(map: HashMap<TypeId, Box<dyn Any>>, table: toml::Table) -> Self {
+    fn new(
+        map: HashMap<TypeId, Box<dyn Any>>,
+        table: toml_edit::Table,
+    ) -> Self {
         Self { map, table }
     }
 
     pub fn mock() -> Self {
         Self {
             map: HashMap::new(),
-            table: toml::Table::new(),
+            table: toml_edit::Table::new(),
         }
     }
 
     /// get the toml config result
-    pub fn get_toml(&self) -> toml::Value {
-        toml::Value::Table(self.table.clone())
+    pub fn get_toml(&self) -> toml_edit::DocumentMut {
+        self.table.clone().into()
     }
 
     /// add new options to map
@@ -184,7 +195,7 @@ impl ConfigMap {
 mod tests {
     use super::*;
 
-    #[derive(Deserialize, Serialize, clap::Args, Debug)]
+    #[derive(Deserialize, Serialize, clap::Args, DocumentedToml, Debug)]
     #[serde(crate = "kaze_plugin::serde")]
     struct DatabaseConfig {
         #[arg(long, default_value = "localhost")]
@@ -196,7 +207,7 @@ mod tests {
         port: u16,
     }
 
-    #[derive(Deserialize, Serialize, clap::Args, Debug)]
+    #[derive(Deserialize, Serialize, clap::Args, DocumentedToml, Debug)]
     #[serde(crate = "kaze_plugin::serde")]
     struct ServerConfig {
         #[arg(long, short, default_value = "0.0.0.0:8080")]

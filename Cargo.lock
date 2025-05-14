@@ -404,6 +404,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "documented-toml"
+version = "0.1.0"
+dependencies = [
+ "documented-toml-derive",
+ "serde",
+ "toml_edit",
+]
+
+[[package]]
+name = "documented-toml-derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -887,7 +905,7 @@ dependencies = [
  "anyhow",
  "clap",
  "kaze-sidecar",
- "toml",
+ "toml_edit",
 ]
 
 [[package]]
@@ -903,6 +921,7 @@ name = "kaze-edge"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "documented-toml",
  "kaze-core",
  "kaze-plugin",
  "kaze-protocol",
@@ -958,6 +977,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "documented-toml",
  "kaze-plugin",
  "moka",
  "papaya",
@@ -990,6 +1010,7 @@ dependencies = [
  "bugreport",
  "clap",
  "dirs",
+ "documented-toml",
  "futures",
  "kaze-edge",
  "kaze-plugin",
@@ -1006,6 +1027,7 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "toml",
+ "toml_edit",
  "tower",
  "tracing",
  "tracing-appender",

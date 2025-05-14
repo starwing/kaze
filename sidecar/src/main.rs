@@ -61,6 +61,8 @@ fn run_sidecar(sidecar: Sidecar) -> anyhow::Result<()> {
 }
 
 fn dump_config(config: ConfigMap) -> anyhow::Result<()> {
-    println!("{}", toml::to_string(&config.get_toml())?);
+    let mut toml = config.get_toml();
+    toml.as_table_mut().sort_values();
+    println!("{}", toml.to_string());
     Ok(())
 }

@@ -1,5 +1,6 @@
 use std::{net::Ipv4Addr, str::FromStr};
 
+use documented_toml::DocumentedToml;
 use kaze_plugin::{
     clap::Args,
     serde::{Deserialize, Serialize},
@@ -9,8 +10,8 @@ use kaze_plugin::{
 
 use super::RateLimit;
 
-// rate limit configurations
-#[derive(Args, Serialize, Deserialize, Clone, Debug)]
+/// rate limit configurations
+#[derive(Args, Serialize, Deserialize, DocumentedToml, Clone, Debug)]
 #[serde(crate = "kaze_plugin::serde")]
 #[command(next_help_heading = "Rate limit configurations")]
 #[group(id = "RateLimitOptions")]
@@ -54,7 +55,8 @@ fn default_timeout() -> DurationString {
     DurationString::from_str("1s").unwrap()
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+/// per message rate limit configurations
+#[derive(Serialize, Deserialize, DocumentedToml, Clone, Debug)]
 #[serde(crate = "kaze_plugin::serde")]
 pub struct PerMsgLimitInfo {
     pub ident: Option<Ipv4Addr>,

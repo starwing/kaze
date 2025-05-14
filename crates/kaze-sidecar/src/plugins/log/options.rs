@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Context as _;
+use documented_toml::DocumentedToml;
 use kaze_plugin::clap::Args;
 use kaze_plugin::serde::{Deserialize, Serialize};
 use kaze_plugin::PluginFactory;
@@ -9,8 +10,8 @@ use tracing_appender::rolling::Rotation;
 
 use super::LogService;
 
-// log file configuration
-#[derive(Args, Serialize, Deserialize, Clone, Debug)]
+/// log file configuration
+#[derive(Args, Serialize, Deserialize, DocumentedToml, Clone, Debug)]
 #[serde(crate = "kaze_plugin::serde")]
 #[group(id = "LogOptions")]
 #[command(next_help_heading = "Log file configurations")]

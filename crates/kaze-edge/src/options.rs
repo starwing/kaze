@@ -1,14 +1,16 @@
 use std::net::Ipv4Addr;
 
 use anyhow::Result;
+use documented_toml::DocumentedToml;
+
 use kaze_plugin::clap::Args;
 use kaze_plugin::serde::{Deserialize, Serialize};
 use kaze_plugin::{ClapDefault, clap};
 
 use crate::Edge;
 
-// Host bridge configurations
-#[derive(Args, Serialize, Deserialize, Clone, Debug)]
+/// Host bridge configurations
+#[derive(Args, Serialize, Deserialize, DocumentedToml, Clone, Debug)]
 #[serde(crate = "kaze_plugin::serde")]
 #[command(next_help_heading = "Host bridge configurations")]
 #[group(id = "EdgeOptions")]

@@ -4,6 +4,7 @@ use std::{
     time::Duration,
 };
 
+use documented_toml::DocumentedToml;
 use kaze_plugin::{
     Plugin,
     clap::Args,
@@ -13,8 +14,8 @@ use kaze_plugin::{
 
 use crate::{Resolver, ResolverNoPlugin, cached::Cached, local::Local};
 
-// local resolver configurations
-#[derive(Args, Serialize, Deserialize, Clone, Debug)]
+/// local resolver configurations
+#[derive(Args, Serialize, Deserialize, DocumentedToml, Clone, Debug)]
 #[command(next_help_heading = "Local resolver configurations")]
 #[group(id = "LocalOptions")]
 pub struct Options {
@@ -47,7 +48,7 @@ impl Options {
 }
 
 /// local ident -> node address mapping
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, DocumentedToml, Clone, Debug)]
 pub struct Node {
     pub ident: Ipv4Addr,
     pub addr: SocketAddr,

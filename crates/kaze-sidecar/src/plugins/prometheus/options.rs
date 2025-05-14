@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 
+use documented_toml::DocumentedToml;
 use kaze_plugin::{
     clap::Args,
     serde::{Deserialize, Serialize},
@@ -9,8 +10,8 @@ use kaze_plugin::{
 
 use super::PrometheusService;
 
-// prometheus push gateway configuration
-#[derive(Args, Serialize, Deserialize, Clone, Debug)]
+/// prometheus push gateway configuration
+#[derive(Args, Serialize, Deserialize, DocumentedToml, Clone, Debug)]
 #[serde(crate = "kaze_plugin::serde")]
 #[group(id = "PrometheusOptions")]
 #[command(next_help_heading = "Prometheus metrics configurations")]

@@ -1,0 +1,11 @@
+[package]
+name = "documented-toml"
+version = "0.1.0"
+edition = "2021"
+description = "A trait for converting structs to TOML tables with documentation"
+license = "MIT"
+
+[dependencies]
+toml_edit = { workspace = true, features = ["serde"] }
+documented-toml-derive.workspace = true
+serde.workspace = true

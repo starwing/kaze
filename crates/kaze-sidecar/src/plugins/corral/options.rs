@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use documented_toml::DocumentedToml;
 use kaze_plugin::{
     clap::Args,
     serde::{Deserialize, Serialize},
@@ -9,8 +10,8 @@ use kaze_plugin::{
 
 use super::Corral;
 
-// corral configurations
-#[derive(Args, Serialize, Deserialize, Clone, Debug)]
+/// corral configurations
+#[derive(Args, Serialize, Deserialize, DocumentedToml, Clone, Debug)]
 #[serde(crate = "kaze_plugin::serde")]
 #[command(next_help_heading = "Corral configurations")]
 #[group(id = "CorralOptions")]

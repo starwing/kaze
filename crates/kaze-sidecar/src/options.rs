@@ -3,6 +3,7 @@ use std::{ffi::OsString, path::PathBuf, sync::LazyLock};
 use anyhow::Context as _;
 use clap::{crate_version, Command, Parser};
 use clap::{CommandFactory as _, FromArgMatches as _};
+use documented_toml::DocumentedToml;
 use kaze_plugin::service::{AsyncService, FilterChain};
 use kaze_plugin::{Context, ContextBuilder};
 use tower::layer::util::Stack;
@@ -21,7 +22,7 @@ use crate::{
 };
 
 /// The kaze sidecar for host
-#[derive(Parser, Serialize, Deserialize, Clone, Debug)]
+#[derive(Parser, Serialize, Deserialize, DocumentedToml, Clone, Debug)]
 #[serde(crate = "kaze_plugin::serde")]
 #[command(version = VERSION.as_str(), about)]
 pub struct Options {
@@ -80,6 +81,7 @@ impl<L> OptionsBuilder<L> {
         T: PluginFactory
             + for<'a> Deserialize<'a>
             + Serialize
+            + DocumentedToml
             + clap::Args
             + 'static,
     {

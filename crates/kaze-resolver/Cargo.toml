@@ -13,6 +13,7 @@ serde.workspace = true
 tokio.workspace = true
 tower = { workspace = true, features = ["util"] }
 tracing.workspace = true
+documented-toml.workspace = true
 
 [dependencies.kaze-plugin]
 path = "../kaze-plugin"

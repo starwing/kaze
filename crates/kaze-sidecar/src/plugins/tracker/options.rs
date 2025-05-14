@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use documented_toml::DocumentedToml;
 use kaze_plugin::{
     clap::Args,
     serde::{Deserialize, Serialize},
@@ -9,8 +10,8 @@ use kaze_plugin::{
 
 use super::RpcTracker;
 
-// RPC call tracker configurations
-#[derive(Args, Serialize, Deserialize, Clone, Debug)]
+/// RPC call tracker configurations
+#[derive(Args, Serialize, Deserialize, DocumentedToml, Clone, Debug)]
 #[serde(crate = "kaze_plugin::serde")]
 #[command(next_help_heading = "Tracker configurations")]
 #[group(id = "TrackerOptions")]
@@ -21,6 +22,7 @@ pub struct Options {
     #[arg(value_name = "LEN")]
     pub tracker_queue_size: usize,
 
+    /// timeout for the RPC call waiting when gracefully exiting
     #[serde(default = "default_exit_timeout")]
     #[arg(short, long, default_value_t = default_exit_timeout())]
     #[arg(value_name = "TIMEOUT")]
