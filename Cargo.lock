@@ -904,6 +904,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "duration-string",
  "kaze-sidecar",
  "toml_edit",
 ]

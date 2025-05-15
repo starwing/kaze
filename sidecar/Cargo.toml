@@ -7,9 +7,8 @@ edition = "2024"
 anyhow.workspace = true
 clap.workspace = true
 toml_edit.workspace = true
-
-[dependencies.kaze-sidecar]
-path = "../crates/kaze-sidecar"
+duration-string.workspace = true
+kaze-sidecar.workspace = true
 
 [profile.release]
 opt-level = 3

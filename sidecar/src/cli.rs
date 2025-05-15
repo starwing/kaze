@@ -1,5 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 
+use crate::commands::{DaemonCommand, SendCommand};
+
 #[derive(Parser, Debug)]
 pub struct Cli {
     #[command(subcommand)]
@@ -12,6 +14,10 @@ pub enum Tools {
     Run(DummyCommand),
     /// Dump the config from config file and command line flags
     Dump(DummyCommand),
+    /// Send a message to a given destination
+    Send(SendCommand),
+    /// Daemon command for managing the Sidecar daemon
+    Daemon(DaemonCommand),
 }
 
 #[derive(Args, Clone, Debug)]

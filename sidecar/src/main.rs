@@ -1,4 +1,5 @@
 mod cli;
+mod commands;
 
 use clap::CommandFactory as _;
 use kaze_sidecar::ConfigMap;
@@ -25,14 +26,15 @@ fn main() -> anyhow::Result<()> {
     let matches = cmd.clone().get_matches();
 
     match matches.subcommand() {
-        Some(("run", subcmd)) => {
-            let sidecar = ob.into_builder(&mut subcmd.clone())?.build()?;
+        Some(("run", matches)) => {
+            let sidecar = ob.into_builder(&mut matches.clone())?.build()?;
             run_sidecar(sidecar)
         }
-        Some(("dump", subcmd)) => {
-            let config = ob.into_builder(&mut subcmd.clone())?.config();
+        Some(("dump", matches)) => {
+            let config = ob.into_builder(&mut matches.clone())?.config();
             dump_config(config)
         }
+        Some((cmd, matches)) => commands::run_subcommand(cmd, matches),
         _ => unreachable!("Unknown Subcommand"),
     }
 }
