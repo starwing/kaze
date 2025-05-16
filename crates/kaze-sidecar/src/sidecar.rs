@@ -4,13 +4,12 @@ use tokio::task::JoinSet;
 use tracing::info;
 use tracing_appender::non_blocking::WorkerGuard;
 
-use kaze_plugin::Context;
-
 use crate::options::{FilterEnd, Options, OptionsBuilder};
+use kaze_plugin::{config_map::ConfigMap, Context};
 
 pub struct Sidecar {
     ctx: Context,
-    options: Options,
+    config_map: ConfigMap,
     _unlink_guard: Option<kaze_edge::UnlinkGuard>,
     _log_guard: Option<WorkerGuard>,
 }
@@ -22,20 +21,20 @@ impl Sidecar {
 
     pub(crate) fn new(
         ctx: Context,
-        options: Options,
+        config_map: ConfigMap,
         _unlink_guard: Option<kaze_edge::UnlinkGuard>,
         _log_guard: Option<WorkerGuard>,
     ) -> Self {
         Self {
             ctx,
-            options,
+            config_map,
             _unlink_guard,
             _log_guard,
         }
     }
     /// get the thread count
     pub fn thread_count(&self) -> Option<usize> {
-        self.options.threads
+        self.config_map.get::<Options>().unwrap().threads
     }
 
     /// Run the sidecar
@@ -80,8 +79,9 @@ impl Sidecar {
 
 #[cfg(test)]
 mod tests {
+    use kaze_plugin::config_map::default_config;
+
     use super::*;
-    use crate::config_map::default_config;
     use std::time::Duration;
 
     #[tokio::test]
@@ -97,12 +97,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_thread_count() {
-        let ctx = Context::builder().build();
+        let ctx = Context::builder().build(ConfigMap::mock());
         let options = Options {
             threads: Some(4),
             ..default_config()
         };
-        let sidecar = Sidecar::new(ctx, options, None, None);
+        let mut config_map = ConfigMap::mock();
+        config_map.insert(options);
+        let sidecar = Sidecar::new(ctx, config_map, None, None);
         assert_eq!(sidecar.thread_count(), Some(4));
     }
 
@@ -135,7 +137,7 @@ mod tests {
         let dummy_shutdown = Shutdown::default();
         ctx.set_shutdown_guard(dummy_shutdown.guard()).unwrap();
 
-        let options = default_config();
+        let options = ConfigMap::mock();
         let sidecar = Sidecar::new(ctx, options, None, None);
 
         let shutdown2 = Shutdown::default();

@@ -1,7 +1,10 @@
+mod typeid_map;
 mod clap_default;
 mod context;
 mod local;
 mod wrapper;
+
+pub mod config_map;
 
 use std::{
     any::Any,
@@ -19,6 +22,7 @@ pub use tokio_graceful;
 
 pub use clap_default::ClapDefault;
 pub use context::*;
+pub use documented_toml::{self, DocumentedToml};
 pub use local::*;
 pub use wrapper::*;
 

@@ -79,7 +79,7 @@ impl Plugin for Host {
 
 #[cfg(test)]
 mod tests {
-    use kaze_plugin::Context;
+    use kaze_plugin::{config_map::ConfigMap, Context};
 
     use super::*;
 
@@ -102,7 +102,7 @@ mod tests {
         let host = Host::new(cmd);
 
         // Create a mock Context
-        let ctx = Context::builder().register(host).build();
+        let ctx = Context::builder().register(host).build(ConfigMap::mock());
 
         let host = ctx.get::<Host>().unwrap();
         let result = host.start().await;
@@ -115,7 +115,7 @@ mod tests {
         let host = Host::new(cmd);
 
         // Create a mock Context
-        let ctx = Context::builder().register(host).build();
+        let ctx = Context::builder().register(host).build(ConfigMap::mock());
 
         let host = ctx.get::<Host>().unwrap();
         let result = host.start().await;

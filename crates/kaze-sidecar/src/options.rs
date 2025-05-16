@@ -15,11 +15,8 @@ use kaze_plugin::{
 use tower::Layer;
 
 use crate::builder::SidecarBuilder;
-use crate::config_map::ConfigFileBuilder;
-use crate::{
-    config_map::{ConfigBuilder, ConfigMap},
-    plugins::{corral, tracker},
-};
+use crate::plugins::{corral, tracker};
+use kaze_plugin::config_map::{ConfigBuilder, ConfigFileBuilder, ConfigMap};
 
 /// The kaze sidecar for host
 #[derive(Parser, Serialize, Deserialize, DocumentedToml, Clone, Debug)]
@@ -320,7 +317,7 @@ mod tests {
         let cb = Context::builder();
 
         let (plugin, cb) = creator.create_plugin(&mut config, cb).unwrap();
-        let config = cb.build();
+        let config = cb.build(ConfigMap::mock());
         assert!(plugin.name().ends_with("::MockPlugin"));
         assert!(config.get::<MockPlugin>().is_some());
     }

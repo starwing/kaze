@@ -57,7 +57,7 @@ pub fn documented_toml_derive(input: TokenStream) -> TokenStream {
     let struct_doc = if let Some(doc) = struct_doc {
         quote! {
             let decor = table.decor().clone();
-            ::documented_toml::format_docs_implace("\n", #doc, &decor, table.decor_mut());
+            documented_toml::format_docs_implace("\n", #doc, &decor, table.decor_mut());
         }
     } else {
         quote! {}
@@ -65,9 +65,9 @@ pub fn documented_toml_derive(input: TokenStream) -> TokenStream {
 
     // Generate the implementation
     let result = quote! {
-        impl ::documented_toml::DocumentedToml for #name {
-            fn as_toml(&self) -> ::documented_toml::toml_edit::Item {
-                let mut item = ::documented_toml::toml_edit::table();
+        impl documented_toml::DocumentedToml for #name {
+            fn as_toml(&self) -> documented_toml::toml_edit::Item {
+                let mut item = documented_toml::toml_edit::table();
                 let mut table = item.as_table_mut().unwrap();
                 #(#field_tokens)*
                 #struct_doc
@@ -94,11 +94,11 @@ fn process_field(
             let process_value = process_value(doc);
             quote! {
                 {
-                    let key = ::documented_toml::toml_edit::Key::new(#field_name_str);
+                    let key = documented_toml::toml_edit::Key::new(#field_name_str);
                     let value = #module_ident::serialize(&self.#field_name,
-                        ::documented_toml::ValueSerializer::new())
+                        documented_toml::ValueSerializer::new())
                         .expect("failed to serialize value");
-                    match ::documented_toml::toml_edit::value(value) {
+                    match documented_toml::toml_edit::value(value) {
                         #process_value
                     }
                 }
@@ -107,9 +107,9 @@ fn process_field(
             quote! {
                 {
                     let value = #module_ident::serialize(&self.#field_name,
-                        ::documented_toml::ValueSerializer::new())
+                        documented_toml::ValueSerializer::new())
                         .expect("failed to serialize value");
-                    let value = ::documented_toml::toml_edit::value(value);
+                    let value = documented_toml::toml_edit::value(value);
                     table.insert(#field_name_str, value);
                 }
             }
@@ -144,8 +144,8 @@ fn process_option_field(
         let process_value = process_value(doc);
         quote! {
             if let Some(ref value) = self.#field_name {
-                let key = ::documented_toml::toml_edit::Key::new(#field_name_str);
-                match (&&&&::documented_toml::Wrap(value)).as_toml() {
+                let key = documented_toml::toml_edit::Key::new(#field_name_str);
+                match (&&&&documented_toml::Wrap(value)).as_toml() {
                     #process_array,
                     #process_table,
                     #process_value,
@@ -173,8 +173,8 @@ fn process_vec_field(
         let process_value = process_value(doc);
         quote! {
             {
-                let key = ::documented_toml::toml_edit::Key::new(#field_name_str);
-                match (&&&&::documented_toml::Wrap(&self.#field_name)).as_toml() {
+                let key = documented_toml::toml_edit::Key::new(#field_name_str);
+                match (&&&&documented_toml::Wrap(&self.#field_name)).as_toml() {
                     #process_array,
                     #process_value,
                 }
@@ -202,8 +202,8 @@ fn process_standard_field(
         let process_value = process_value(doc);
         quote! {
             {
-                let key = ::documented_toml::toml_edit::Key::new(#field_name_str);
-                match (&&&&::documented_toml::Wrap(&self.#field_name)).as_toml() {
+                let key = documented_toml::toml_edit::Key::new(#field_name_str);
+                match (&&&&documented_toml::Wrap(&self.#field_name)).as_toml() {
                     #process_array,
                     #process_table,
                     #process_value,
@@ -222,13 +222,13 @@ fn process_standard_field(
 
 fn process_array(doc: &String) -> proc_macro2::TokenStream {
     quote! {
-        ::documented_toml::toml_edit::Item::ArrayOfTables(mut array_value) => {
+        documented_toml::toml_edit::Item::ArrayOfTables(mut array_value) => {
             if let Some(first) = array_value.get_mut(0) {
-                ::documented_toml::format_docs_implace("", #doc, table.decor(), first.decor_mut());
-                table.insert_formatted(&key, ::documented_toml::toml_edit::Item::ArrayOfTables(array_value));
+                documented_toml::format_docs_implace("", #doc, table.decor(), first.decor_mut());
+                table.insert_formatted(&key, documented_toml::toml_edit::Item::ArrayOfTables(array_value));
             } else {
-                let key = key.with_decor(::documented_toml::format_docs("", #doc, table.decor()));
-                table.insert_formatted(&key, ::documented_toml::toml_edit::Item::None);
+                let key = key.with_decor(documented_toml::format_docs("", #doc, table.decor()));
+                table.insert_formatted(&key, documented_toml::toml_edit::Item::None);
             }
         }
     }
@@ -236,9 +236,9 @@ fn process_array(doc: &String) -> proc_macro2::TokenStream {
 
 fn process_table(doc: &String) -> proc_macro2::TokenStream {
     quote! {
-        ::documented_toml::toml_edit::Item::Table(ref mut table_value) => {
-            ::documented_toml::format_docs_implace("\n", #doc, table.decor(), table_value.decor_mut());
-            table.insert_formatted(&key, ::documented_toml::toml_edit::Item::Table(table_value.clone()));
+        documented_toml::toml_edit::Item::Table(ref mut table_value) => {
+            documented_toml::format_docs_implace("\n", #doc, table.decor(), table_value.decor_mut());
+            table.insert_formatted(&key, documented_toml::toml_edit::Item::Table(table_value.clone()));
         }
     }
 }
@@ -246,7 +246,7 @@ fn process_table(doc: &String) -> proc_macro2::TokenStream {
 fn process_value(doc: &String) -> proc_macro2::TokenStream {
     quote! {
         value => {
-            let key = key.with_decor(::documented_toml::format_docs("", #doc, table.decor()));
+            let key = key.with_decor(documented_toml::format_docs("", #doc, table.decor()));
             table.insert_formatted(&key, value);
         }
     }

@@ -2,8 +2,7 @@ mod cli;
 mod commands;
 
 use clap::CommandFactory as _;
-use kaze_sidecar::ConfigMap;
-use kaze_sidecar::plugins::{log, prometheus, ratelimit};
+use kaze_sidecar::plugins::{log, prometheus, ratelimit, ConfigMap};
 use kaze_sidecar::sidecar::Sidecar;
 use kaze_sidecar::tracing::error;
 use kaze_sidecar::{Shutdown, tokio, tracing::info};

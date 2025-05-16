@@ -7,6 +7,7 @@ use tracing_subscriber::{
 };
 
 use kaze_plugin::{
+    config_map::ConfigMap,
     protocol::{
         message::Message,
         service::{SinkMessage, ToMessageService},
@@ -17,7 +18,6 @@ use kaze_plugin::{
 use kaze_resolver::ResolverExt as _;
 
 use crate::{
-    config_map::ConfigMap,
     host::Host,
     options::{Options, VERSION},
     plugins::{corral, log, tracker},
@@ -47,7 +47,7 @@ impl<F> SidecarBuilder<F> {
         self.config
     }
 
-    pub fn build(mut self) -> anyhow::Result<Sidecar>
+    pub fn build(self) -> anyhow::Result<Sidecar>
     where
         F: AsyncService<
                 Message,
@@ -74,7 +74,7 @@ impl<F> SidecarBuilder<F> {
         // create edge intstance
         let edge = self
             .config
-            .take::<kaze_edge::Options>()
+            .get::<kaze_edge::Options>()
             .unwrap()
             .build()
             .context("Failed to create edge")?;
@@ -82,12 +82,12 @@ impl<F> SidecarBuilder<F> {
         let (tx, rx) = edge.into_split();
 
         // create corral instance
-        let corral = self.config.take::<corral::Options>().unwrap().build()?;
+        let corral = self.config.get::<corral::Options>().unwrap().build()?;
 
         // create the base resolver (local) instance
         let resolver = futures::executor::block_on(async {
             self.config
-                .take::<kaze_resolver::LocalOptions>()
+                .get::<kaze_resolver::LocalOptions>()
                 .unwrap()
                 .build()
                 .await
@@ -96,7 +96,7 @@ impl<F> SidecarBuilder<F> {
         // create the tracker instance
         let tracker = self
             .config
-            .take::<tracker::Options>()
+            .get::<tracker::Options>()
             .unwrap()
             .build()
             .context("failed to build tracker")?;
@@ -121,13 +121,15 @@ impl<F> SidecarBuilder<F> {
             .map_response(|_| ());
 
         // construct the context
-        let mut config = self.config;
-        let options = config.take::<Options>().unwrap();
-        let ctx = cb.register(Host::new(options.host_cmd.clone())).build();
+        let config = self.config;
+        let options = config.get::<Options>().unwrap();
+        let ctx = cb
+            .register(Host::new(options.host_cmd.clone()))
+            .build(ConfigMap::mock());
         ctx.sink()
             .set(BoxCloneSyncService::new(pipeline.into_tower()));
 
-        Ok(Sidecar::new(ctx, options, Some(_unlink_guard), _log_guard))
+        Ok(Sidecar::new(ctx, config, Some(_unlink_guard), _log_guard))
     }
 
     fn init_log(
@@ -176,7 +178,7 @@ fn env_filter() -> EnvFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config_map::default_config;
+    use kaze_plugin::config_map::default_config;
     use kaze_plugin::Context;
     use std::{env::temp_dir, net::Ipv4Addr};
 

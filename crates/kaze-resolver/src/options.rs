@@ -37,10 +37,10 @@ pub struct Options {
 }
 
 impl Options {
-    pub async fn build(self) -> impl Resolver + Plugin + Clone {
+    pub async fn build(&self) -> impl Resolver + Plugin + Clone {
         let resolver =
             Cached::new(Local::new(), self.cache_size, self.live_time);
-        for node in self.nodes {
+        for node in &self.nodes {
             resolver.add_node(node.ident.to_bits(), node.addr).await;
         }
         ResolverNoPlugin::new(Arc::new(resolver))

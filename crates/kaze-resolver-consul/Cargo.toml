@@ -4,3 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow.workspace = true
+rs-consul.workspace = true
+tracing.workspace = true
+local-ip-address.workspace = true
+tokio.workspace = true
+gethostname.workspace = true
+#
+kaze-plugin.workspace = true
+kaze-resolver.workspace = true

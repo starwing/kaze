@@ -3,19 +3,19 @@ mod merge;
 
 pub use filefinder::ConfigFileBuilder;
 
-use std::{
-    any::{Any, TypeId},
-    collections::HashMap,
-};
+use std::any::{Any, TypeId};
 
 use clap::ArgMatches;
 use documented_toml::DocumentedToml;
-use kaze_plugin::serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
+
+use crate::typeid_map::TypeIdMap;
+
+type AnyMap = TypeIdMap<Box<dyn Any + Send + Sync>>;
 
 /// builder for ConfigMap
 pub struct ConfigBuilder {
-    map: HashMap<TypeId, Box<dyn Any>>,
-    table: toml_edit::Table,
+    map: AnyMap,
     mergers: Vec<Box<dyn Merger>>,
     cmd: clap::Command,
 }
@@ -26,8 +26,7 @@ impl ConfigBuilder {
         Self {
             cmd,
             mergers: Vec::new(),
-            map: HashMap::new(),
-            table: toml_edit::Table::new(),
+            map: AnyMap::default(),
         }
     }
 
@@ -37,6 +36,8 @@ impl ConfigBuilder {
             + Serialize
             + DocumentedToml
             + clap::Args
+            + Send
+            + Sync
             + 'static,
     >(
         mut self,
@@ -63,13 +64,14 @@ impl ConfigBuilder {
         matches: &mut ArgMatches,
         content: toml::Value,
     ) -> anyhow::Result<ConfigMap> {
+        let mut table = toml_edit::Table::new();
         // update the structs from the matches
         for merger in self.mergers.drain(..) {
-            merger.merge(&content, matches, &mut self.map, &mut self.table)?;
+            merger.merge(&content, matches, &mut self.map, &mut table)?;
         }
 
         // build the ConfigMap
-        Ok(ConfigMap::new(self.map, self.table))
+        Ok(ConfigMap::new(self.map, table))
     }
 }
 
@@ -78,7 +80,7 @@ trait Merger {
         &self,
         content: &toml::Value,
         matches: &mut clap::ArgMatches,
-        map: &mut HashMap<TypeId, Box<dyn Any>>,
+        map: &mut AnyMap,
         table: &mut toml_edit::Table,
     ) -> anyhow::Result<()>;
 }
@@ -103,13 +105,15 @@ where
         + Serialize
         + DocumentedToml
         + clap::Args
+        + Send
+        + Sync
         + 'static,
 {
     fn merge(
         &self,
         content: &toml::Value,
         matches: &mut clap::ArgMatches,
-        map: &mut HashMap<TypeId, Box<dyn Any>>,
+        map: &mut AnyMap,
         table: &mut toml_edit::Table,
     ) -> anyhow::Result<()> {
         // if the table is not present, use the default value
@@ -124,7 +128,7 @@ where
         // update the value
         table.insert(&self.name, config.as_toml());
         // update from matches
-        map.insert(TypeId::of::<T>(), config as Box<dyn Any>);
+        map.insert(TypeId::of::<T>(), config as Box<dyn Any + Send + Sync>);
         Ok(())
     }
 }
@@ -139,21 +143,18 @@ pub fn default_config<T: clap::Args>() -> T {
 
 /// ConfigMap stores the parsed config
 pub struct ConfigMap {
-    map: HashMap<TypeId, Box<dyn Any>>,
+    map: AnyMap,
     table: toml_edit::Table,
 }
 
 impl ConfigMap {
-    fn new(
-        map: HashMap<TypeId, Box<dyn Any>>,
-        table: toml_edit::Table,
-    ) -> Self {
+    fn new(map: AnyMap, table: toml_edit::Table) -> Self {
         Self { map, table }
     }
 
     pub fn mock() -> Self {
         Self {
-            map: HashMap::new(),
+            map: AnyMap::default(),
             table: toml_edit::Table::new(),
         }
     }
@@ -164,7 +165,7 @@ impl ConfigMap {
     }
 
     /// add new options to map
-    pub fn insert<T: Any>(&mut self, config: T) {
+    pub fn insert<T: Any + Send + Sync>(&mut self, config: T) {
         self.map.insert(TypeId::of::<T>(), Box::new(config));
     }
 
@@ -181,14 +182,6 @@ impl ConfigMap {
             .get_mut(&TypeId::of::<T>())
             .and_then(|x| x.downcast_mut::<T>())
     }
-
-    /// take the config
-    pub fn take<T: Any>(&mut self) -> Option<T> {
-        self.map
-            .remove(&TypeId::of::<T>())
-            .and_then(|x| x.downcast::<T>().ok())
-            .map(|e| *e)
-    }
 }
 
 #[cfg(test)]
@@ -196,7 +189,6 @@ mod tests {
     use super::*;
 
     #[derive(Deserialize, Serialize, clap::Args, DocumentedToml, Debug)]
-    #[serde(crate = "kaze_plugin::serde")]
     struct DatabaseConfig {
         #[arg(long, default_value = "localhost")]
         #[serde(default)]
@@ -208,7 +200,6 @@ mod tests {
     }
 
     #[derive(Deserialize, Serialize, clap::Args, DocumentedToml, Debug)]
-    #[serde(crate = "kaze_plugin::serde")]
     struct ServerConfig {
         #[arg(long, short, default_value = "0.0.0.0:8080")]
         #[serde(default)]

@@ -249,6 +249,7 @@ mod tests {
     use tower::util::BoxCloneSyncService;
 
     use kaze_plugin::{
+        config_map::ConfigMap,
         protocol::{
             message::{Destination, PacketWithAddr, Source},
             proto::RetCode,
@@ -276,7 +277,9 @@ mod tests {
             tracker_queue_size: 10,
             exit_timeout: "5s".parse().unwrap(),
         });
-        let ctx = Context::builder().register(tracker.clone()).build();
+        let ctx = Context::builder()
+            .register(tracker.clone())
+            .build(ConfigMap::mock());
         ctx.sink().set(sink);
         let msg = Message::new_with_destination(
             Packet::from_hdr(Hdr {

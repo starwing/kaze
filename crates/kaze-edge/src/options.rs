@@ -3,9 +3,9 @@ use std::net::Ipv4Addr;
 use anyhow::Result;
 use documented_toml::DocumentedToml;
 
-use kaze_plugin::clap::Args;
+use kaze_plugin::ClapDefault;
+use kaze_plugin::clap::{self, Args};
 use kaze_plugin::serde::{Deserialize, Serialize};
-use kaze_plugin::{ClapDefault, clap};
 
 use crate::Edge;
 
@@ -68,8 +68,8 @@ impl Options {
     }
 
     /// build
-    pub fn build(self) -> Result<Edge> {
-        Edge::new(self.name, self.ident, self.bufsize, self.unlink)
+    pub fn build(&self) -> Result<Edge> {
+        Edge::new(&self.name, self.ident, self.bufsize, self.unlink)
     }
 }
 

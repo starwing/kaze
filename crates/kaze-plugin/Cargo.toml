@@ -6,14 +6,19 @@ edition = "2024"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+dirs.workspace = true
 futures.workspace = true
 papaya.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
 tokio-graceful.workspace = true
 tokio.workspace = true
+toml.workspace = true
+toml_edit.workspace = true
 tower.workspace = true
+tracing.workspace = true
 #
+documented-toml.workspace = true
 kaze-protocol.workspace = true
 kaze-service.workspace = true
 kaze-util.workspace = true

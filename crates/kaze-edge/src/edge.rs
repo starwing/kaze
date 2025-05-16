@@ -271,7 +271,7 @@ impl Plugin for Sender {
 
 #[cfg(test)]
 mod tests {
-    use kaze_plugin::service::AsyncService;
+    use kaze_plugin::{config_map::ConfigMap, service::AsyncService};
     use kaze_protocol::{
         message::{Destination, Message, Source},
         packet::Packet,
@@ -285,7 +285,9 @@ mod tests {
         let edge = Options::new().with_unlink(true).build().unwrap();
         let _guard = edge.unlink_guard();
         let (tx, _rx) = edge.into_split();
-        kaze_plugin::Context::builder().register(tx.clone()).build();
+        kaze_plugin::Context::builder()
+            .register(tx.clone())
+            .build(ConfigMap::mock());
         let r = tx
             .serve(Message::new_with_destination(
                 Packet::from_retcode(Hdr::default(), RetCode::RetOk),

@@ -301,6 +301,7 @@ impl ConnSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kaze_plugin::config_map::ConfigMap;
     use kaze_plugin::PluginFactory as _;
     use std::net::SocketAddr;
     use std::str::FromStr;
@@ -316,7 +317,9 @@ mod tests {
         }
         .build()
         .unwrap();
-        Context::builder().register(corral.clone()).build();
+        Context::builder()
+            .register(corral.clone())
+            .build(ConfigMap::mock());
         corral
     }
 
@@ -363,7 +366,9 @@ mod tests {
         .unwrap();
 
         // Mock context initialization
-        Context::builder().register(corral.clone()).build();
+        Context::builder()
+            .register(corral.clone())
+            .build(ConfigMap::mock());
 
         // Create a server
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

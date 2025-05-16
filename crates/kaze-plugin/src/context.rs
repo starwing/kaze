@@ -1,8 +1,6 @@
 use std::{
     any::TypeId,
-    collections::HashMap,
     future::pending,
-    hash::{BuildHasherDefault, Hasher},
     sync::{Arc, OnceLock},
 };
 
@@ -16,23 +14,25 @@ use kaze_protocol::{
 };
 use kaze_util::tower_ext::ServiceExt;
 
-use crate::{PipelineCell, Plugin, local_node};
+use crate::{
+    PipelineCell, Plugin, config_map::ConfigMap, local_node,
+    typeid_map::TypeIdMap,
+};
 
-type AnyMap = HashMap<TypeId, Box<dyn Plugin>, BuildHasherDefault<IdHasher>>;
+type PluginMap = TypeIdMap<Box<dyn Plugin>>;
 
 pub struct ContextBuilder {
-    components: AnyMap,
+    plugins: PluginMap,
 }
 
 impl ContextBuilder {
     pub fn register<T: Plugin>(mut self, component: T) -> Self {
-        self.components
-            .insert(TypeId::of::<T>(), Box::new(component));
+        self.plugins.insert(TypeId::of::<T>(), Box::new(component));
         self
     }
 
-    pub fn build(self) -> Context {
-        let ctx = Context::new(self.components);
+    pub fn build(self, config_map: ConfigMap) -> Context {
+        let ctx = Context::new(self.plugins, config_map);
         for component in ctx.inner.components.values() {
             component.init(ctx.clone());
         }
@@ -57,7 +57,8 @@ pub struct Context {
 struct Inner {
     sink: PipelineCell,
     pool: BytesPool,
-    components: AnyMap,
+    components: PluginMap,
+    config_map: ConfigMap,
     shutdown_guard: OnceLock<ShutdownGuard>,
     real_exit: Notify,
 }
@@ -69,7 +70,7 @@ impl std::fmt::Debug for Context {
 }
 
 impl Context {
-    fn new(components: AnyMap) -> Self {
+    fn new(components: PluginMap, config_map: ConfigMap) -> Self {
         Self {
             inner: Arc::new(Inner {
                 sink: PipelineCell::new(),
@@ -77,17 +78,18 @@ impl Context {
                 shutdown_guard: OnceLock::new(),
                 real_exit: Notify::new(),
                 components,
+                config_map,
             }),
         }
     }
 
     pub fn mock() -> Self {
-        Self::new(AnyMap::default())
+        Self::new(PluginMap::default(), ConfigMap::mock())
     }
 
     pub fn builder() -> ContextBuilder {
         ContextBuilder {
-            components: AnyMap::default(),
+            plugins: PluginMap::default(),
         }
     }
 
@@ -114,6 +116,10 @@ impl Context {
 
     pub fn pool(&self) -> &BytesPool {
         &self.inner.pool
+    }
+
+    pub fn config_map(&self) -> &ConfigMap {
+        &self.inner.config_map
     }
 
     /// Get a reference to the shutdown guard,
@@ -216,33 +222,12 @@ impl Context {
     }
 }
 
-// With TypeIds as keys, there's no need to hash them. They are already hashes
-// themselves, coming from the compiler. The IdHasher just holds the u64 of
-// the TypeId, and then returns it, instead of doing any bit fiddling.
-#[derive(Default)]
-struct IdHasher(u64);
-
-impl Hasher for IdHasher {
-    fn write(&mut self, _: &[u8]) {
-        unreachable!("TypeId calls write_u64");
-    }
-
-    #[inline]
-    fn write_u64(&mut self, id: u64) {
-        self.0 = id;
-    }
-
-    #[inline]
-    fn finish(&self) -> u64 {
-        self.0
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::pin::Pin;
     use std::task::{Context as TaskContext, Poll};
 
+    use crate::config_map::ConfigMap;
     use crate::{Context, Plugin};
 
     #[derive(Clone)]
@@ -278,14 +263,14 @@ mod tests {
             .register(TestComponent {
                 value: "test".to_string(),
             })
-            .build();
+            .build(ConfigMap::mock());
         let retrieved = context.get::<TestComponent>().unwrap();
         assert_eq!(retrieved.value, "test");
     }
 
     #[tokio::test]
     async fn test_get_nonexistent_component() {
-        let context = Context::builder().build();
+        let context = Context::builder().build(ConfigMap::mock());
 
         let retrieved = context.get::<TestComponent>();
         assert!(retrieved.is_none());
@@ -293,7 +278,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_task() {
-        let context = Context::builder().build();
+        let context = Context::builder().build(ConfigMap::mock());
 
         let handle = context.spawn_task(async { 42 });
 
@@ -302,14 +287,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_task_fn() {
-        let context = Context::builder().build();
+        let context = Context::builder().build(ConfigMap::mock());
         let handle = context.spawn_task_fn(|_guard| async { 42 });
         assert_eq!(handle.await.unwrap(), 42);
     }
 
     #[tokio::test]
     async fn test_guard_reference() {
-        let context = Context::builder().build();
+        let context = Context::builder().build(ConfigMap::mock());
 
         let handle = context.spawn_task_fn(|_guard| async { 42 });
         assert_eq!(handle.await.unwrap(), 42);

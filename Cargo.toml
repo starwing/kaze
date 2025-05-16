@@ -22,21 +22,23 @@ bugreport = "0.5.1"
 bytes = "1.10.1"
 clap = { version = "4.5.37", features = ["derive"] }
 dirs = "6.0.0"
-documented = "0.9.1"
 duration-string = { version = "0.5.2", features = ["serde"] }
 futures = "0.3.31"
 leaky-bucket = "1.1.2"
+local-ip-address = "0.6.5"
 lockfree-object-pool = "0.1.6"
 lru = "0.14.0"
 metrics = "0.24.2"
 metrics-exporter-prometheus = "0.17.0"
 moka = { version = "0.12.10", features = ["future"] }
+gethostname = "1.0.2"
 page_size = "0.6.0"
 papaya = "0.2.1"
 parking_lot = { version = "0.12.3", features = ["arc_lock"] }
 pin-project = "1.1.10"
 prost = "0.13.5"
 rand = "0.9.1"
+rs-consul = "0.11.0"
 scopeguard = "1.2.0"
 serde = { version = "1.0.219", features = ["derive"] }
 thingbuf = "0.1.6"
