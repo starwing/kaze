@@ -12,9 +12,9 @@ pub const KZ_AGAIN: c_int = -5;
 pub const KZ_BUSY: c_int = -6;
 pub const KZ_TIMEOUT: c_int = -7;
 
-pub const KZ_CREATE: c_int = 1 << 0;
-pub const KZ_EXCL: c_int = 1 << 1;
-pub const KZ_RESET: c_int = 1 << 2;
+pub const KZ_CREATE: c_int = 1 << 16;
+pub const KZ_EXCL: c_int = 1 << 17;
+pub const KZ_RESET: c_int = 1 << 18;
 
 pub const KZ_READ: c_int = 1 << 0;
 pub const KZ_WRITE: c_int = 1 << 1;

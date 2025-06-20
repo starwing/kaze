@@ -18,40 +18,66 @@ pub use bytes;
 pub use split::{OwnedReadHalf, OwnedWriteHalf};
 
 /// Builder for creating a new channel or opening an existing one
-pub struct OpenOptions(i32, usize);
+pub struct OpenOptions {
+    flags: i32,
+    perm: u32,
+    bufsize: usize,
+}
 
 impl OpenOptions {
     /// Create a new channel builder.
     pub fn new() -> Self {
-        Self(0, 0)
+        Self {
+            flags: 0,
+            perm: 0o644, // Default permission
+            bufsize: 0,  // Default buffer size
+        }
     }
 
     /// Sets the option to create a new file, or open it if it already exists.
     pub fn create(self, create: bool, bufsize: usize) -> Self {
-        Self(self.0 | if create { ffi::KZ_CREATE } else { 0 }, bufsize)
+        Self {
+            flags: self.flags | if create { ffi::KZ_CREATE } else { 0 },
+            perm: self.perm,
+            bufsize,
+        }
+    }
+
+    /// Sets the permission for the channel file.
+    pub fn perm(self, perm: u32) -> Self {
+        Self {
+            flags: self.flags,
+            perm,
+            bufsize: self.bufsize,
+        }
     }
 
     /// Sets the option to create a new file, failing if it already exists.
     pub fn create_new(self, create: bool, bufsize: usize) -> Self {
-        Self(
-            self.0
+        Self {
+            flags: self.flags
                 | if create {
                     ffi::KZ_CREATE | ffi::KZ_EXCL
                 } else {
                     0
                 },
+            perm: self.perm,
             bufsize,
-        )
+        }
     }
 
     /// Set the channel will be reset after opened.
     pub fn reset(self) -> Self {
-        Self(self.0 | ffi::KZ_RESET, self.1)
+        Self {
+            flags: self.flags | ffi::KZ_RESET,
+            perm: self.perm,
+            bufsize: self.bufsize,
+        }
     }
 
     /// Opens an channel with name and the options specified by self.
     pub fn open(self, name: impl AsRef<Path>) -> IoResult<Channel> {
-        Channel::raw_open(name, self.0, self.1)
+        Channel::raw_open(name, self.flags | self.perm as i32, self.bufsize)
     }
 }
 
